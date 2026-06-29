@@ -1,0 +1,42 @@
+<svg
+    width="320"
+    height="320"
+    viewBox="0 0 320 320"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    role="img"
+    aria-labelledby="title desc"
+>
+  <title id="title">NoSkrap Logo</title>
+  <desc id="desc">Bouclier contenant une araignée barrée d'un X rouge.</desc>
+
+  <rect width="320" height="320" rx="72" fill="#101820" />
+
+  <path
+        d="M160 46L252 78V142C252 202 216 252 160 276C104 252 68 202 68 142V78L160 46Z"
+        fill="#F4F7F5"
+    />
+  <path
+        d="M160 72L226 95V144C226 190 200 228 160 248C120 228 94 190 94 144V95L160 72Z"
+        fill="#101820"
+    />
+
+  <path
+        d="M148 130 L120 110 L100 120 M145 140 L110 135 L90 150 M145 150 L110 165 L95 185 M150 160 L125 190 L115 210 M172 130 L200 110 L220 120 M175 140 L210 135 L230 150 M175 150 L210 165 L225 185 M170 160 L195 190 L205 210"
+        stroke="#2EE59D"
+        stroke-width="6"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        fill="none"
+    />
+
+  <circle cx="160" cy="125" r="12" fill="#2EE59D" />
+  <circle cx="160" cy="155" r="22" fill="#2EE59D" />
+
+  <path
+        d="M110 90 L210 190 M210 90 L110 190"
+        stroke="#FF5A5F"
+        stroke-width="24"
+        stroke-linecap="round"
+    />
+</svg>
