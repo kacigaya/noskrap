@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { getNoSkrapDecision } from "./next";
+import { createNoSkrapTelemetryHandler, getNoSkrapDecision } from "./next";
 
 test("route handler helper returns core decision", async () => {
   const result = await getNoSkrapDecision(
@@ -16,4 +16,19 @@ test("route handler helper returns core decision", async () => {
 
   expect(result.decision).toBe("allow");
   expect(result.headers.get("set-cookie")).toContain("noskrap_visitor=");
+});
+
+test("telemetry handler records interaction and returns cookie", async () => {
+  const handler = createNoSkrapTelemetryHandler({
+    secret: "test-secret-with-enough-bytes",
+  });
+  const response = await handler(
+    new Request("https://example.test/api/noskrap/telemetry", {
+      method: "POST",
+      body: JSON.stringify({ interacted: true }),
+    }),
+  );
+
+  expect(response.status).toBe(200);
+  expect(response.headers.get("set-cookie")).toContain("noskrap_visitor=");
 });

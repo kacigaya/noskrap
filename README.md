@@ -103,9 +103,34 @@ NoSkrap MVP checks:
 - user-agent and Client Hints platform mismatch
 - weak fetch metadata on protected state-changing requests
 - missing visitor cookie continuity on protected routes
+- protected state-changing requests without recent interaction telemetry
 - route burst rate per visitor and IP bucket
 
 Each score contribution includes a stable `ruleId` and score.
+
+## Telemetry
+
+Add a route handler:
+
+```ts
+// app/api/noskrap/telemetry/route.ts
+import { createNoSkrapTelemetryHandler } from "noskrap/next";
+
+export const POST = createNoSkrapTelemetryHandler({
+  secret: process.env.NOSKRAP_SECRET!,
+});
+```
+
+Send coarse interaction state from your app:
+
+```ts
+fetch("/api/noskrap/telemetry", {
+  method: "POST",
+  body: JSON.stringify({ pageView: true, interacted: true }),
+});
+```
+
+NoSkrap stores only coarse timestamps for page view and interaction state.
 
 ## Config
 

@@ -10,6 +10,8 @@ export interface VisitorState {
   firstSeen: number;
   lastSeen: number;
   rollingRisk: number;
+  lastPageViewAt?: number;
+  lastInteractionAt?: number;
 }
 
 export interface BotStorage {
@@ -53,10 +55,16 @@ export interface BotResult {
   headers: Headers;
 }
 
+export interface TelemetryPayload {
+  pageView?: boolean;
+  interacted?: boolean;
+}
+
 const DEFAULT_THRESHOLDS = { observe: 30, challenge: 60, block: 85 };
 const VISITOR_COOKIE = "noskrap_visitor";
 const VISITOR_TTL_SECONDS = 60 * 60 * 24 * 30;
 const RATE_WINDOW_SECONDS = 60;
+const INTERACTION_TTL_MS = 10 * 60 * 1000;
 let defaultMemoryStorage: MemoryBotStorage | undefined;
 
 export async function scoreRequest(
@@ -78,6 +86,8 @@ export async function scoreRequest(
     firstSeen,
     lastSeen: now,
     rollingRisk: existing?.rollingRisk ?? 0,
+    lastPageViewAt: existing?.lastPageViewAt,
+    lastInteractionAt: existing?.lastInteractionAt,
   };
 
   const reasons: BotReason[] = [];
@@ -128,6 +138,15 @@ export async function scoreRequest(
     addReason("behavior.noCookieContinuity", 15);
   }
 
+  if (
+    isProtected &&
+    isUnsafeMethod(request.method) &&
+    (!visitor.lastInteractionAt ||
+      now - visitor.lastInteractionAt > INTERACTION_TTL_MS)
+  ) {
+    addReason("behavior.noRecentInteraction", 30);
+  }
+
   const ip = getClientIp(request, config.trustedProxies);
   const ipCount = await storage.incrementCounter(
     `ip:${ip}:${url.pathname}`,
@@ -170,6 +189,36 @@ export async function scoreRequest(
     visitorId,
     headers: responseHeaders,
   };
+}
+
+export async function recordTelemetry(
+  request: Request,
+  config: NoSkrapConfig,
+  payload: TelemetryPayload,
+): Promise<BotResult> {
+  const result = await scoreRequest(request, config);
+  const now = config.now?.() ?? Date.now();
+  const storage = config.storage ?? getDefaultStorage();
+  const existing = await storage.getVisitor(result.visitorId);
+
+  await storage.setVisitor(
+    result.visitorId,
+    {
+      id: result.visitorId,
+      firstSeen: existing?.firstSeen ?? now,
+      lastSeen: now,
+      rollingRisk: existing?.rollingRisk ?? result.score,
+      lastPageViewAt: payload.pageView
+        ? now
+        : existing?.lastPageViewAt,
+      lastInteractionAt: payload.interacted
+        ? now
+        : existing?.lastInteractionAt,
+    },
+    VISITOR_TTL_SECONDS,
+  );
+
+  return result;
 }
 
 export class MemoryBotStorage implements BotStorage {

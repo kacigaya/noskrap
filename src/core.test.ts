@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   MemoryBotStorage,
   decisionForScore,
+  recordTelemetry,
   scoreRequest,
   signVisitorToken,
   verifyVisitorToken,
@@ -71,9 +72,12 @@ describe("scoring", () => {
       },
     );
 
-    expect(result.decision).toBe("challenge");
+    expect(result.decision).toBe("block");
     expect(result.reasons.map((reason) => reason.ruleId)).toContain(
       "browser.automationUa",
+    );
+    expect(result.reasons.map((reason) => reason.ruleId)).toContain(
+      "behavior.noRecentInteraction",
     );
     expect(result.headers.get("set-cookie")).toContain(
       "HttpOnly; Secure; SameSite=Lax; Path=/",
@@ -118,6 +122,95 @@ describe("scoring", () => {
 
     expect(result?.reasons.map((reason) => reason.ruleId)).toContain(
       "rate.routeBurst",
+    );
+  });
+
+  test("scores protected post without recent interaction", async () => {
+    const storage = new MemoryBotStorage(() => 1000);
+    const first = await scoreRequest(new Request("https://example.test/"), {
+      secret: SECRET,
+      storage,
+    });
+    const cookie = first.headers.get("set-cookie")?.split(";")[0] ?? "";
+
+    const result = await scoreRequest(
+      new Request("https://example.test/api/search", {
+        method: "POST",
+        headers: { cookie },
+      }),
+      { secret: SECRET, protectedRoutes: ["/api/search"], storage },
+    );
+
+    expect(result.reasons.map((reason) => reason.ruleId)).toContain(
+      "behavior.noRecentInteraction",
+    );
+  });
+
+  test("allows protected post after recent interaction", async () => {
+    const storage = new MemoryBotStorage(() => 1000);
+    const first = await scoreRequest(new Request("https://example.test/"), {
+      secret: SECRET,
+      storage,
+    });
+    const cookie = first.headers.get("set-cookie")?.split(";")[0] ?? "";
+
+    await recordTelemetry(
+      new Request("https://example.test/api/noskrap/telemetry", {
+        method: "POST",
+        headers: { cookie },
+      }),
+      { secret: SECRET, storage },
+      { interacted: true },
+    );
+
+    const result = await scoreRequest(
+      new Request("https://example.test/api/search", {
+        method: "POST",
+        headers: { cookie },
+      }),
+      { secret: SECRET, protectedRoutes: ["/api/search"], storage },
+    );
+
+    expect(result.reasons.map((reason) => reason.ruleId)).not.toContain(
+      "behavior.noRecentInteraction",
+    );
+  });
+
+  test("scores protected post after stale interaction", async () => {
+    let now = 1000;
+    const storage = new MemoryBotStorage(() => now);
+    const first = await scoreRequest(new Request("https://example.test/"), {
+      secret: SECRET,
+      storage,
+      now: () => now,
+    });
+    const cookie = first.headers.get("set-cookie")?.split(";")[0] ?? "";
+
+    await recordTelemetry(
+      new Request("https://example.test/api/noskrap/telemetry", {
+        method: "POST",
+        headers: { cookie },
+      }),
+      { secret: SECRET, storage, now: () => now },
+      { interacted: true },
+    );
+    now += 10 * 60 * 1000 + 1;
+
+    const result = await scoreRequest(
+      new Request("https://example.test/api/search", {
+        method: "POST",
+        headers: { cookie },
+      }),
+      {
+        secret: SECRET,
+        protectedRoutes: ["/api/search"],
+        storage,
+        now: () => now,
+      },
+    );
+
+    expect(result.reasons.map((reason) => reason.ruleId)).toContain(
+      "behavior.noRecentInteraction",
     );
   });
 });

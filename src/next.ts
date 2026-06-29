@@ -1,4 +1,9 @@
-import { type BotResult, type NoSkrapConfig, scoreRequest } from "./core.js";
+import {
+  type BotResult,
+  type NoSkrapConfig,
+  recordTelemetry,
+  scoreRequest,
+} from "./core.js";
 
 export async function getNoSkrapDecision(
   request: Request,
@@ -36,6 +41,23 @@ export function createNoSkrapProxy(config: NoSkrapConfig) {
     const response = NextResponse.next();
     copySetCookie(decision.headers, response.headers);
     return response;
+  };
+}
+
+export function createNoSkrapTelemetryHandler(config: NoSkrapConfig) {
+  return async function noSkrapTelemetry(request: Request): Promise<Response> {
+    const payload = await request.json().catch(() => ({}));
+    const result = await recordTelemetry(request, config, {
+      pageView: payload?.pageView === true,
+      interacted: payload?.interacted === true,
+    });
+
+    return Response.json(
+      { ok: true },
+      {
+        headers: result.headers,
+      },
+    );
   };
 }
 
