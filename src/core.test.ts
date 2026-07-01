@@ -227,7 +227,10 @@ describe("challenge pass", () => {
       now: () => now,
       thresholds: { observe: 0, challenge: 0, block: 101 },
     };
-    const first = await scoreRequest(new Request("https://example.test/"), config);
+    const first = await scoreRequest(
+      new Request("https://example.test/"),
+      config,
+    );
     const visitorCookie = cookieHeader(first.headers);
     const passHeaders = await createChallengePassHeaders(
       new Request("https://example.test/bot-check", {
@@ -262,7 +265,10 @@ describe("challenge pass", () => {
       now: () => 1000,
       thresholds: { observe: 0, challenge: 0, block: 30 },
     };
-    const first = await scoreRequest(new Request("https://example.test/"), config);
+    const first = await scoreRequest(
+      new Request("https://example.test/"),
+      config,
+    );
     const visitorCookie = cookieHeader(first.headers);
     const passHeaders = await createChallengePassHeaders(
       new Request("https://example.test/bot-check", {
@@ -293,7 +299,10 @@ describe("challenge pass", () => {
       challengeTtlSeconds: 1,
       thresholds: { observe: 0, challenge: 0, block: 101 },
     };
-    const first = await scoreRequest(new Request("https://example.test/"), config);
+    const first = await scoreRequest(
+      new Request("https://example.test/"),
+      config,
+    );
     const visitorCookie = cookieHeader(first.headers);
     const passHeaders = await createChallengePassHeaders(
       new Request("https://example.test/bot-check", {
@@ -324,9 +333,8 @@ describe("challenge pass", () => {
 
 function cookieHeader(headers: Headers): string {
   const values =
-    "getSetCookie" in headers
-      ? (headers as Headers & { getSetCookie(): string[] }).getSetCookie()
-      : [headers.get("set-cookie") ?? ""];
+    (headers as Headers & { getSetCookie?: () => string[] }).getSetCookie?.() ??
+    [headers.get("set-cookie") ?? ""];
 
   return values
     .flatMap((value) => value.split(/,(?=[^;,]+=)/))
