@@ -12,34 +12,34 @@ const GITHUB_URL = "https://github.com/kacigaya/noskrap";
 
 const FEATURES = [
   {
-    title: "Request scoring",
+    title: "Start in observe mode",
     description:
-      "Score each request with header, fetch metadata, continuity, interaction, and rate signals.",
+      "Ship the proxy without blocking anyone. Watch scores, reasons, and cookies before you enforce.",
   },
   {
-    title: "Explainable reasons",
+    title: "See why traffic scored",
     description:
-      "Every score contribution includes a stable rule id so logs and dashboards stay readable.",
+      "Each decision carries stable rule ids, so logs explain what changed instead of saying bot magic.",
   },
   {
-    title: "Enforce mode",
+    title: "Protect noisy endpoints",
     description:
-      "Return 403 for block decisions or redirect challenge decisions to your own check page.",
+      "Apply checks where scraping hurts: search, login, checkout, and other expensive routes.",
   },
   {
-    title: "Challenge pass",
+    title: "Challenge without lock-in",
     description:
-      "Issue a short-lived signed pass after your app verifies a visitor; block still wins.",
+      "Use your own check page or CAPTCHA provider, then issue a short-lived signed pass.",
   },
   {
-    title: "Interaction telemetry",
+    title: "Ask for coarse signals",
     description:
-      "Record coarse page-view and interaction timestamps without storing sensitive event streams.",
+      "Record page views and recent interaction timestamps, not full event streams.",
   },
   {
-    title: "Client popup",
+    title: "Tell users what happened",
     description:
-      "Use a tiny browser helper to show a bot-detected popup for challenge and block decisions.",
+      "Show a simple bot-detected popup, or wire the helper into your own toast or modal.",
   },
 ];
 
@@ -92,12 +92,11 @@ export default function Home() {
           Next.js · TypeScript · Bot-risk scoring
         </Badge>
         <h1 className="font-heading text-5xl font-bold tracking-tight sm:text-6xl">
-          Bot-risk decisions for Next.js apps
+          Protect Next.js routes without guessing who is human
         </h1>
         <p className="mt-6 max-w-2xl text-lg text-muted-foreground">
-          NoSkrap scores requests with explainable signals, signed visitor continuity,
-          interaction telemetry, and enforce-mode responses. Start in observe mode, then
-          challenge or block high-risk traffic when you are ready.
+          NoSkrap gives every request an explainable risk score. Start by watching traffic,
+          then challenge or block the routes that bots make expensive.
         </p>
         <div className="mt-10 flex flex-col gap-3 sm:flex-row">
           <Button size="xl" render={<Link href={DOCS_URL} />}>
@@ -117,7 +116,7 @@ export default function Home() {
       {/* Features */}
       <section className="mx-auto w-full max-w-5xl px-6 pb-24">
         <h2 className="mb-10 text-center font-heading text-3xl font-bold tracking-tight">
-          Risk scoring with boring primitives
+          Built for the messy middle between allow and block
         </h2>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {FEATURES.map((feature) => (
@@ -136,7 +135,7 @@ export default function Home() {
         <h2 className="mb-6 text-center font-heading text-3xl font-bold tracking-tight">
           Quickstart
         </h2>
-        <CodeBlock code={QUICKSTART} lang="python" />
+        <CodeBlock code={QUICKSTART} lang="ts" />
       </section>
 
       {/* Footer */}

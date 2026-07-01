@@ -1,5 +1,7 @@
 # Quickstart
 
+This guide starts with observation. You can ship the proxy, collect decisions, and turn on enforcement after you trust the scores.
+
 ## Add the proxy
 
 ```ts
@@ -16,9 +18,11 @@ export const proxy = createNoSkrapProxy({
 });
 ```
 
-The proxy runs in observe mode unless `mode: "enforce"` is set.
+The proxy runs in observe mode unless `mode: "enforce"` is set. In observe mode it sets visitor continuity cookies and returns `NextResponse.next()`.
 
 ## Inspect a decision in a route handler
+
+Route handlers are useful when one endpoint needs to decide locally.
 
 ```ts
 import { getNoSkrapDecision } from "noskrap/next";
@@ -39,6 +43,8 @@ export async function POST(request: Request) {
 
 ## Add telemetry
 
+Telemetry gives NoSkrap one coarse human signal: recent interaction.
+
 ```ts
 // app/api/noskrap/telemetry/route.ts
 import { createNoSkrapTelemetryHandler } from "noskrap/next";
@@ -56,6 +62,8 @@ fetch("/api/noskrap/telemetry", {
 ```
 
 ## Enforce later
+
+When scores look sane in logs, switch the proxy to enforce mode.
 
 ```ts
 export const proxy = createNoSkrapProxy({

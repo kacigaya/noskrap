@@ -1,6 +1,6 @@
 # NoSkrap
 
-TypeScript bot-risk framework for Next.js apps. NoSkrap scores each request with coherent signals and returns one decision: `allow`, `observe`, `challenge`, or `block`.
+NoSkrap helps Next.js apps handle suspicious traffic without starting with a hard block. It scores each request, explains the signals behind the score, and lets you choose when to observe, challenge, or block.
 
 ## Install
 
@@ -23,9 +23,11 @@ export const proxy = createNoSkrapProxy({
 });
 ```
 
-Default mode is `observe`, so NoSkrap scores requests and sets a signed visitor cookie without blocking traffic.
+Default mode is `observe`, so the first deploy is low risk. NoSkrap scores requests and sets a signed visitor cookie, but every request still continues.
 
 ## Decisions
+
+Scores map to four decisions:
 
 | Score | Decision |
 | ---: | --- |
@@ -33,6 +35,8 @@ Default mode is `observe`, so NoSkrap scores requests and sets a signed visitor 
 | 30-59 | `observe` |
 | 60-84 | `challenge` |
 | 85+ | `block` |
+
+Use observe mode to learn what normal traffic looks like. Turn on enforce mode when you know which routes should challenge or block high-risk requests.
 
 ## Explore
 
