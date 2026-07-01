@@ -132,6 +132,16 @@ fetch("/api/noskrap/telemetry", {
 
 NoSkrap stores only coarse timestamps for page view and interaction state.
 
+## Bot detected popup
+
+```ts
+import { showBotDetectedPopup } from "noskrap/client";
+
+showBotDetectedPopup(result);
+```
+
+By default, this shows `"Bot detected."` for `challenge` and `block` decisions.
+
 ## Config
 
 ```ts
