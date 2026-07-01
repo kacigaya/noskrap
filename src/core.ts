@@ -36,6 +36,7 @@ export interface NoSkrapConfig {
   mode?: "observe" | "enforce";
   protectedRoutes?: string[];
   challengePath?: string;
+  challengeTtlSeconds?: number;
   trustedProxies?: string[];
   storage?: BotStorage;
   thresholds?: {
@@ -52,6 +53,7 @@ export interface BotResult {
   score: number;
   reasons: BotReason[];
   visitorId: string;
+  challengePassed: boolean;
   headers: Headers;
 }
 
@@ -62,7 +64,9 @@ export interface TelemetryPayload {
 
 const DEFAULT_THRESHOLDS = { observe: 30, challenge: 60, block: 85 };
 const VISITOR_COOKIE = "noskrap_visitor";
+const CHALLENGE_COOKIE = "noskrap_challenge";
 const VISITOR_TTL_SECONDS = 60 * 60 * 24 * 30;
+const CHALLENGE_TTL_SECONDS = 10 * 60;
 const RATE_WINDOW_SECONDS = 60;
 const INTERACTION_TTL_MS = 10 * 60 * 1000;
 let defaultMemoryStorage: MemoryBotStorage | undefined;
@@ -181,12 +185,16 @@ export async function scoreRequest(
     "set-cookie",
     `${VISITOR_COOKIE}=${signedToken}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${VISITOR_TTL_SECONDS}`,
   );
+  const decision = decisionForScore(score, thresholds);
+  const challengePassed =
+    decision === "challenge" && await verifyChallengePass(request, config);
 
   return {
-    decision: decisionForScore(score, thresholds),
+    decision: challengePassed ? "allow" : decision,
     score,
     reasons,
     visitorId,
+    challengePassed,
     headers: responseHeaders,
   };
 }
@@ -219,6 +227,48 @@ export async function recordTelemetry(
   );
 
   return result;
+}
+
+export async function createChallengePassHeaders(
+  request: Request,
+  config: NoSkrapConfig,
+): Promise<Headers> {
+  const result = await scoreRequest(request, config);
+  const now = config.now?.() ?? Date.now();
+  const maxAge = config.challengeTtlSeconds ?? CHALLENGE_TTL_SECONDS;
+  const token = await signChallengePassToken(
+    {
+      id: result.visitorId,
+      expiresAt: now + maxAge * 1000,
+    },
+    firstSecret(config.secret),
+  );
+
+  result.headers.append(
+    "set-cookie",
+    `${CHALLENGE_COOKIE}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAge}`,
+  );
+  return result.headers;
+}
+
+export async function verifyChallengePass(
+  request: Request,
+  config: NoSkrapConfig,
+): Promise<boolean> {
+  const visitorToken = getCookie(request, VISITOR_COOKIE);
+  const challengeToken = getCookie(request, CHALLENGE_COOKIE);
+  if (!visitorToken || !challengeToken) return false;
+
+  const visitor = await verifyVisitorToken(visitorToken, config.secret);
+  const challenge = await verifyChallengePassToken(challengeToken, config.secret);
+  const now = config.now?.() ?? Date.now();
+
+  return Boolean(
+    visitor &&
+      challenge &&
+      challenge.id === visitor.id &&
+      challenge.expiresAt > now,
+  );
 }
 
 export class MemoryBotStorage implements BotStorage {
@@ -322,6 +372,40 @@ export async function verifyVisitorToken(
         if (
           typeof payload.id === "string" &&
           typeof payload.firstSeen === "number"
+        ) {
+          return payload;
+        }
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+async function signChallengePassToken(
+  payload: { id: string; expiresAt: number },
+  secret: string,
+): Promise<string> {
+  const body = base64UrlEncode(JSON.stringify(payload));
+  const signature = await hmac(body, secret);
+  return `${body}.${signature}`;
+}
+
+async function verifyChallengePassToken(
+  token: string,
+  secrets: string | string[],
+): Promise<{ id: string; expiresAt: number } | null> {
+  const [body, signature] = token.split(".");
+  if (!body || !signature) return null;
+
+  for (const secret of Array.isArray(secrets) ? secrets : [secrets]) {
+    if ((await hmac(body, secret)) === signature) {
+      try {
+        const payload = JSON.parse(base64UrlDecode(body));
+        if (
+          typeof payload.id === "string" &&
+          typeof payload.expiresAt === "number"
         ) {
           return payload;
         }

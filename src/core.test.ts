@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
   MemoryBotStorage,
+  createChallengePassHeaders,
   decisionForScore,
   recordTelemetry,
   scoreRequest,
   signVisitorToken,
+  verifyChallengePass,
   verifyVisitorToken,
 } from "./core";
 
@@ -214,3 +216,120 @@ describe("scoring", () => {
     );
   });
 });
+
+describe("challenge pass", () => {
+  test("allows challenge decision with valid pass", async () => {
+    let now = 1000;
+    const storage = new MemoryBotStorage(() => now);
+    const config = {
+      secret: SECRET,
+      storage,
+      now: () => now,
+      thresholds: { observe: 0, challenge: 0, block: 101 },
+    };
+    const first = await scoreRequest(new Request("https://example.test/"), config);
+    const visitorCookie = cookieHeader(first.headers);
+    const passHeaders = await createChallengePassHeaders(
+      new Request("https://example.test/bot-check", {
+        headers: { cookie: visitorCookie },
+      }),
+      config,
+    );
+    const cookie = cookieHeader(passHeaders);
+
+    expect(
+      await verifyChallengePass(
+        new Request("https://example.test/", { headers: { cookie } }),
+        config,
+      ),
+    ).toBe(true);
+
+    const result = await scoreRequest(
+      new Request("https://example.test/", { headers: { cookie } }),
+      config,
+    );
+
+    expect(result.score).toBe(0);
+    expect(result.challengePassed).toBe(true);
+    expect(result.decision).toBe("allow");
+  });
+
+  test("does not allow block decision with valid pass", async () => {
+    const storage = new MemoryBotStorage(() => 1000);
+    const config = {
+      secret: SECRET,
+      storage,
+      now: () => 1000,
+      thresholds: { observe: 0, challenge: 0, block: 30 },
+    };
+    const first = await scoreRequest(new Request("https://example.test/"), config);
+    const visitorCookie = cookieHeader(first.headers);
+    const passHeaders = await createChallengePassHeaders(
+      new Request("https://example.test/bot-check", {
+        headers: { cookie: visitorCookie },
+      }),
+      config,
+    );
+    const cookie = cookieHeader(passHeaders);
+
+    const result = await scoreRequest(
+      new Request("https://example.test/api/search", {
+        headers: { cookie, "user-agent": "curl/8.0" },
+      }),
+      config,
+    );
+
+    expect(result.challengePassed).toBe(false);
+    expect(result.decision).toBe("block");
+  });
+
+  test("ignores expired and tampered challenge pass", async () => {
+    let now = 1000;
+    const storage = new MemoryBotStorage(() => now);
+    const config = {
+      secret: SECRET,
+      storage,
+      now: () => now,
+      challengeTtlSeconds: 1,
+      thresholds: { observe: 0, challenge: 0, block: 101 },
+    };
+    const first = await scoreRequest(new Request("https://example.test/"), config);
+    const visitorCookie = cookieHeader(first.headers);
+    const passHeaders = await createChallengePassHeaders(
+      new Request("https://example.test/bot-check", {
+        headers: { cookie: visitorCookie },
+      }),
+      config,
+    );
+    const cookie = cookieHeader(passHeaders);
+
+    now = 2001;
+    expect(
+      await verifyChallengePass(
+        new Request("https://example.test/", { headers: { cookie } }),
+        config,
+      ),
+    ).toBe(false);
+
+    expect(
+      await verifyChallengePass(
+        new Request("https://example.test/", {
+          headers: { cookie: `${cookie}x` },
+        }),
+        { ...config, now: () => 1000 },
+      ),
+    ).toBe(false);
+  });
+});
+
+function cookieHeader(headers: Headers): string {
+  const values =
+    "getSetCookie" in headers
+      ? (headers as Headers & { getSetCookie(): string[] }).getSetCookie()
+      : [headers.get("set-cookie") ?? ""];
+
+  return values
+    .flatMap((value) => value.split(/,(?=[^;,]+=)/))
+    .map((value) => value.split(";")[0])
+    .join("; ");
+}

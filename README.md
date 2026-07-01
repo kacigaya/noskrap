@@ -48,6 +48,19 @@ export default createNoSkrapProxy({
 
 In enforce mode, `block` returns `403`. `challenge` redirects to `challengePath` when configured.
 
+After your challenge page verifies the visitor, issue a short-lived pass:
+
+```ts
+// app/api/noskrap/challenge-pass/route.ts
+import { createNoSkrapChallengePassHandler } from "noskrap/next";
+
+export const POST = createNoSkrapChallengePassHandler({
+  secret: process.env.NOSKRAP_SECRET!,
+});
+```
+
+The pass only downgrades future `challenge` decisions to `allow`; `block` decisions still block.
+
 ## Route handlers
 
 ```ts
@@ -150,6 +163,7 @@ interface NoSkrapConfig {
   mode?: "observe" | "enforce";
   protectedRoutes?: string[];
   challengePath?: string;
+  challengeTtlSeconds?: number;
   trustedProxies?: string[];
   storage?: BotStorage;
   thresholds?: {

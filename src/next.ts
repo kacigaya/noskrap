@@ -1,6 +1,7 @@
 import {
   type BotResult,
   type NoSkrapConfig,
+  createChallengePassHeaders,
   recordTelemetry,
   scoreRequest,
 } from "./core.js";
@@ -56,6 +57,19 @@ export function createNoSkrapTelemetryHandler(config: NoSkrapConfig) {
       { ok: true },
       {
         headers: result.headers,
+      },
+    );
+  };
+}
+
+export function createNoSkrapChallengePassHandler(config: NoSkrapConfig) {
+  return async function noSkrapChallengePass(
+    request: Request,
+  ): Promise<Response> {
+    return Response.json(
+      { ok: true },
+      {
+        headers: await createChallengePassHeaders(request, config),
       },
     );
   };

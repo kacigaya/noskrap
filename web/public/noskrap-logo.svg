@@ -10,6 +10,7 @@
   <title id="title">NoSkrap Logo</title>
   <desc id="desc">Bouclier contenant une araignée barrée d'un X rouge.</desc>
 
+  <rect width="320" height="320" rx="72" fill="#101820" />
 
   <path
         d="M160 46L252 78V142C252 202 216 252 160 276C104 252 68 202 68 142V78L160 46Z"

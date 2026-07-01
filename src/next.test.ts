@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
-import { createNoSkrapTelemetryHandler, getNoSkrapDecision } from "./next";
+import {
+  createNoSkrapChallengePassHandler,
+  createNoSkrapTelemetryHandler,
+  getNoSkrapDecision,
+} from "./next";
 
 test("route handler helper returns core decision", async () => {
   const result = await getNoSkrapDecision(
@@ -31,4 +35,20 @@ test("telemetry handler records interaction and returns cookie", async () => {
 
   expect(response.status).toBe(200);
   expect(response.headers.get("set-cookie")).toContain("noskrap_visitor=");
+});
+
+test("challenge pass handler returns visitor and challenge cookies", async () => {
+  const handler = createNoSkrapChallengePassHandler({
+    secret: "test-secret-with-enough-bytes",
+  });
+  const response = await handler(
+    new Request("https://example.test/api/noskrap/challenge-pass", {
+      method: "POST",
+    }),
+  );
+  const cookie = response.headers.get("set-cookie");
+
+  expect(response.status).toBe(200);
+  expect(cookie).toContain("noskrap_visitor=");
+  expect(cookie).toContain("noskrap_challenge=");
 });
