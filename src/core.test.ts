@@ -10,12 +10,12 @@ import {
   verifyVisitorToken,
 } from "./core";
 
-const SECRET = "test-secret-with-enough-bytes";
+const SECRET = "test-secret-with-at-least-32-bytes";
 
 describe("visitor token", () => {
   test("verifies signed payload and rejects tampering", async () => {
     const token = await signVisitorToken(
-      { id: "v_test", firstSeen: 1000, lastSeen: 2000, rollingRisk: 12 },
+      { id: "v_test" },
       SECRET,
     );
 
@@ -24,8 +24,12 @@ describe("visitor token", () => {
     });
     expect(await verifyVisitorToken(`${token}x`, SECRET)).toBeNull();
     expect(
-      await verifyVisitorToken(token, ["old-secret", SECRET]),
+      await verifyVisitorToken(token, [
+        "old-test-secret-with-at-least-32-bytes",
+        SECRET,
+      ]),
     ).toMatchObject({ id: "v_test" });
+    expect(await verifyVisitorToken(`${token}.extra`, SECRET)).toBeNull();
   });
 });
 
@@ -40,14 +44,15 @@ describe("memory storage", () => {
     expect(await storage.incrementCounter("route", 1)).toBe(1);
   });
 
-  test("rejects reused nonce before ttl", async () => {
-    let now = 0;
-    const storage = new MemoryBotStorage(() => now);
+  test("bounds stored visitors", async () => {
+    const storage = new MemoryBotStorage(() => 0, 2);
+    await storage.setVisitor("a", { id: "a", lastSeen: 0 }, 60);
+    await storage.setVisitor("b", { id: "b", lastSeen: 0 }, 60);
+    await storage.setVisitor("c", { id: "c", lastSeen: 0 }, 60);
 
-    expect(await storage.putNonce("n", 1)).toBe(true);
-    expect(await storage.putNonce("n", 1)).toBe(false);
-    now = 1001;
-    expect(await storage.putNonce("n", 1)).toBe(true);
+    expect(await storage.getVisitor("a")).toBeNull();
+    expect(await storage.getVisitor("b")).not.toBeNull();
+    expect(await storage.getVisitor("c")).not.toBeNull();
   });
 });
 
@@ -83,6 +88,23 @@ describe("scoring", () => {
     );
     expect(result.headers.get("set-cookie")).toContain(
       "HttpOnly; Secure; SameSite=Lax; Path=/",
+    );
+  });
+
+  test("does not treat an invalid cookie as visitor continuity", async () => {
+    const result = await scoreRequest(
+      new Request("https://example.test/api/search", {
+        headers: { cookie: "noskrap_visitor=invalid" },
+      }),
+      {
+        secret: SECRET,
+        protectedRoutes: ["/api/search"],
+        storage: new MemoryBotStorage(() => 1000),
+      },
+    );
+
+    expect(result.reasons.map((reason) => reason.ruleId)).toContain(
+      "behavior.noCookieContinuity",
     );
   });
 
@@ -125,6 +147,54 @@ describe("scoring", () => {
     expect(result?.reasons.map((reason) => reason.ruleId)).toContain(
       "rate.routeBurst",
     );
+  });
+
+  test("does not share an unknown IP rate bucket", async () => {
+    const storage = new MemoryBotStorage(() => 1000);
+    let result;
+
+    for (let index = 0; index < 61; index += 1) {
+      result = await scoreRequest(
+        new Request("https://example.test/search"),
+        { secret: SECRET, storage },
+      );
+    }
+
+    expect(result?.reasons.map((reason) => reason.ruleId)).not.toContain(
+      "rate.routeBurst",
+    );
+  });
+
+  test("uses an explicit trusted IP resolver for rate limits", async () => {
+    const storage = new MemoryBotStorage(() => 1000);
+    let result;
+
+    for (let index = 0; index < 61; index += 1) {
+      result = await scoreRequest(
+        new Request("https://example.test/search"),
+        {
+          secret: SECRET,
+          storage,
+          getClientIp: () => "203.0.113.1",
+        },
+      );
+    }
+
+    expect(result?.reasons.map((reason) => reason.ruleId)).toContain(
+      "rate.routeBurst",
+    );
+  });
+
+  test("rejects unsafe configuration", async () => {
+    await expect(
+      scoreRequest(new Request("https://example.test/"), { secret: "" }),
+    ).rejects.toThrow("at least 32 characters");
+    await expect(
+      scoreRequest(new Request("https://example.test/"), {
+        secret: SECRET,
+        thresholds: { observe: 60, challenge: 30, block: 85 },
+      }),
+    ).rejects.toThrow("thresholds");
   });
 
   test("scores protected post without recent interaction", async () => {
@@ -225,7 +295,7 @@ describe("challenge pass", () => {
       secret: SECRET,
       storage,
       now: () => now,
-      thresholds: { observe: 0, challenge: 0, block: 101 },
+      thresholds: { observe: 0, challenge: 0, block: 100 },
     };
     const first = await scoreRequest(
       new Request("https://example.test/"),
@@ -238,7 +308,8 @@ describe("challenge pass", () => {
       }),
       config,
     );
-    const cookie = cookieHeader(passHeaders);
+    expect(passHeaders).not.toBeNull();
+    const cookie = `${visitorCookie}; ${cookieHeader(passHeaders!)}`;
 
     expect(
       await verifyChallengePass(
@@ -276,7 +347,8 @@ describe("challenge pass", () => {
       }),
       config,
     );
-    const cookie = cookieHeader(passHeaders);
+    expect(passHeaders).not.toBeNull();
+    const cookie = `${visitorCookie}; ${cookieHeader(passHeaders!)}`;
 
     const result = await scoreRequest(
       new Request("https://example.test/api/search", {
@@ -297,7 +369,7 @@ describe("challenge pass", () => {
       storage,
       now: () => now,
       challengeTtlSeconds: 1,
-      thresholds: { observe: 0, challenge: 0, block: 101 },
+      thresholds: { observe: 0, challenge: 0, block: 100 },
     };
     const first = await scoreRequest(
       new Request("https://example.test/"),
@@ -310,7 +382,8 @@ describe("challenge pass", () => {
       }),
       config,
     );
-    const cookie = cookieHeader(passHeaders);
+    expect(passHeaders).not.toBeNull();
+    const cookie = `${visitorCookie}; ${cookieHeader(passHeaders!)}`;
 
     now = 2001;
     expect(
@@ -328,6 +401,15 @@ describe("challenge pass", () => {
         { ...config, now: () => 1000 },
       ),
     ).toBe(false);
+  });
+
+  test("requires an existing visitor before issuing a pass", async () => {
+    expect(
+      await createChallengePassHeaders(
+        new Request("https://example.test/bot-check"),
+        { secret: SECRET },
+      ),
+    ).toBeNull();
   });
 });
 

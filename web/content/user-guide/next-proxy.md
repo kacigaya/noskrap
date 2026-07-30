@@ -23,8 +23,12 @@ Observe mode is the default. It scores traffic, returns `NextResponse.next()`, a
 createNoSkrapProxy({
   secret: process.env.NOSKRAP_SECRET!,
   protectedRoutes: ["/api/search"],
+  onDecision: (result) => console.info("noskrap", result),
 });
 ```
+
+The callback is the observation path; NoSkrap does not expose risk details to
+the client.
 
 ## Enforce mode
 
@@ -52,3 +56,14 @@ protectedRoutes: ["/api/search"]
 ```
 
 This protects `/api/search` and `/api/search/suggestions`.
+
+## Client IP
+
+IP rate limiting is disabled unless you supply a trusted resolver:
+
+```ts
+getClientIp: (request) => request.headers.get("cf-connecting-ip")
+```
+
+Only read a header your deployment platform overwrites; never trust arbitrary
+forwarded headers from the public internet.

@@ -7,10 +7,7 @@ export interface BotReason {
 
 export interface VisitorState {
   id: string;
-  firstSeen: number;
   lastSeen: number;
-  rollingRisk: number;
-  lastPageViewAt?: number;
   lastInteractionAt?: number;
 }
 
@@ -22,7 +19,6 @@ export interface BotStorage {
     ttlSeconds: number,
   ): Promise<void>;
   incrementCounter(key: string, windowSeconds: number): Promise<number>;
-  putNonce(key: string, ttlSeconds: number): Promise<boolean>;
 }
 
 export interface RuleConfig {
@@ -37,7 +33,7 @@ export interface NoSkrapConfig {
   protectedRoutes?: string[];
   challengePath?: string;
   challengeTtlSeconds?: number;
-  trustedProxies?: string[];
+  getClientIp?: (request: Request) => string | null | undefined;
   storage?: BotStorage;
   thresholds?: {
     observe: number;
@@ -58,8 +54,7 @@ export interface BotResult {
 }
 
 export interface TelemetryPayload {
-  pageView?: boolean;
-  interacted?: boolean;
+  interacted: boolean;
 }
 
 const DEFAULT_THRESHOLDS = { observe: 30, challenge: 60, block: 85 };
@@ -69,12 +64,14 @@ const VISITOR_TTL_SECONDS = 60 * 60 * 24 * 30;
 const CHALLENGE_TTL_SECONDS = 10 * 60;
 const RATE_WINDOW_SECONDS = 60;
 const INTERACTION_TTL_MS = 10 * 60 * 1000;
+const MIN_SECRET_LENGTH = 32;
 let defaultMemoryStorage: MemoryBotStorage | undefined;
 
 export async function scoreRequest(
   request: Request,
   config: NoSkrapConfig,
 ): Promise<BotResult> {
+  validateConfig(config);
   const now = config.now?.() ?? Date.now();
   const storage = config.storage ?? getDefaultStorage();
   const thresholds = config.thresholds ?? DEFAULT_THRESHOLDS;
@@ -84,21 +81,16 @@ export async function scoreRequest(
     : null;
   const visitorId = tokenPayload?.id ?? createId();
   const existing = await storage.getVisitor(visitorId);
-  const firstSeen = existing?.firstSeen ?? tokenPayload?.firstSeen ?? now;
   const visitor: VisitorState = {
     id: visitorId,
-    firstSeen,
     lastSeen: now,
-    rollingRisk: existing?.rollingRisk ?? 0,
-    lastPageViewAt: existing?.lastPageViewAt,
     lastInteractionAt: existing?.lastInteractionAt,
   };
 
   const reasons: BotReason[] = [];
   const addReason = (ruleId: string, score: number) => {
-    if (ruleScore(config, ruleId, score) > 0) {
-      reasons.push({ ruleId, score: ruleScore(config, ruleId, score) });
-    }
+    const configuredScore = ruleScore(config, ruleId, score);
+    if (configuredScore > 0) reasons.push({ ruleId, score: configuredScore });
   };
 
   const url = new URL(request.url);
@@ -138,7 +130,7 @@ export async function scoreRequest(
     addReason("headers.badFetchMetadata", 20);
   }
 
-  if (!token && existing === null && isProtected) {
+  if (!tokenPayload && existing === null && isProtected) {
     addReason("behavior.noCookieContinuity", 15);
   }
 
@@ -151,11 +143,13 @@ export async function scoreRequest(
     addReason("behavior.noRecentInteraction", 30);
   }
 
-  const ip = getClientIp(request, config.trustedProxies);
-  const ipCount = await storage.incrementCounter(
-    `ip:${ip}:${url.pathname}`,
-    RATE_WINDOW_SECONDS,
-  );
+  const ip = config.getClientIp?.(request)?.trim();
+  const ipCount = ip
+    ? await storage.incrementCounter(
+        `ip:${ip}:${url.pathname}`,
+        RATE_WINDOW_SECONDS,
+      )
+    : 0;
   const visitorCount = await storage.incrementCounter(
     `visitor:${visitorId}:${url.pathname}`,
     RATE_WINDOW_SECONDS,
@@ -168,16 +162,10 @@ export async function scoreRequest(
     100,
     reasons.reduce((sum, reason) => sum + reason.score, 0),
   );
-  visitor.rollingRisk = Math.round((visitor.rollingRisk + score) / 2);
   await storage.setVisitor(visitorId, visitor, VISITOR_TTL_SECONDS);
 
   const signedToken = await signVisitorToken(
-    {
-      id: visitorId,
-      firstSeen,
-      lastSeen: now,
-      rollingRisk: visitor.rollingRisk,
-    },
+    { id: visitorId },
     firstSecret(config.secret),
   );
   const responseHeaders = new Headers();
@@ -213,12 +201,7 @@ export async function recordTelemetry(
     result.visitorId,
     {
       id: result.visitorId,
-      firstSeen: existing?.firstSeen ?? now,
       lastSeen: now,
-      rollingRisk: existing?.rollingRisk ?? result.score,
-      lastPageViewAt: payload.pageView
-        ? now
-        : existing?.lastPageViewAt,
       lastInteractionAt: payload.interacted
         ? now
         : existing?.lastInteractionAt,
@@ -232,29 +215,37 @@ export async function recordTelemetry(
 export async function createChallengePassHeaders(
   request: Request,
   config: NoSkrapConfig,
-): Promise<Headers> {
-  const result = await scoreRequest(request, config);
+): Promise<Headers | null> {
+  validateConfig(config);
+  const visitorToken = getCookie(request, VISITOR_COOKIE);
+  const visitor = visitorToken
+    ? await verifyVisitorToken(visitorToken, config.secret)
+    : null;
+  if (!visitor) return null;
+
   const now = config.now?.() ?? Date.now();
   const maxAge = config.challengeTtlSeconds ?? CHALLENGE_TTL_SECONDS;
   const token = await signChallengePassToken(
     {
-      id: result.visitorId,
+      id: visitor.id,
       expiresAt: now + maxAge * 1000,
     },
     firstSecret(config.secret),
   );
 
-  result.headers.append(
+  const headers = new Headers();
+  headers.append(
     "set-cookie",
     `${CHALLENGE_COOKIE}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAge}`,
   );
-  return result.headers;
+  return headers;
 }
 
 export async function verifyChallengePass(
   request: Request,
   config: NoSkrapConfig,
 ): Promise<boolean> {
+  validateConfig(config);
   const visitorToken = getCookie(request, VISITOR_COOKIE);
   const challengeToken = getCookie(request, CHALLENGE_COOKIE);
   if (!visitorToken || !challengeToken) return false;
@@ -277,9 +268,15 @@ export class MemoryBotStorage implements BotStorage {
     { value: VisitorState; expiresAt: number }
   >();
   private counters = new Map<string, { value: number; expiresAt: number }>();
-  private nonces = new Map<string, number>();
 
-  constructor(private readonly now: () => number = Date.now) {}
+  constructor(
+    private readonly now: () => number = Date.now,
+    private readonly maxEntries = 10_000,
+  ) {
+    if (!Number.isInteger(maxEntries) || maxEntries < 1) {
+      throw new TypeError("maxEntries must be a positive integer");
+    }
+  }
 
   async getVisitor(id: string): Promise<VisitorState | null> {
     const entry = this.visitors.get(id);
@@ -295,6 +292,7 @@ export class MemoryBotStorage implements BotStorage {
     state: VisitorState,
     ttlSeconds: number,
   ): Promise<void> {
+    this.makeRoom(this.visitors, id);
     this.visitors.set(id, {
       value: state,
       expiresAt: this.now() + ttlSeconds * 1000,
@@ -304,6 +302,7 @@ export class MemoryBotStorage implements BotStorage {
   async incrementCounter(key: string, windowSeconds: number): Promise<number> {
     const existing = this.counters.get(key);
     if (!existing || existing.expiresAt <= this.now()) {
+      this.makeRoom(this.counters, key);
       this.counters.set(key, {
         value: 1,
         expiresAt: this.now() + windowSeconds * 1000,
@@ -314,13 +313,21 @@ export class MemoryBotStorage implements BotStorage {
     return existing.value;
   }
 
-  async putNonce(key: string, ttlSeconds: number): Promise<boolean> {
-    const expiresAt = this.nonces.get(key);
-    if (expiresAt && expiresAt > this.now()) {
-      return false;
+  private makeRoom<T extends { expiresAt: number }>(
+    map: Map<string, T>,
+    nextKey: string,
+  ): void {
+    if (map.has(nextKey) || map.size < this.maxEntries) return;
+
+    const now = this.now();
+    for (const [key, entry] of map) {
+      if (entry.expiresAt <= now) map.delete(key);
     }
-    this.nonces.set(key, this.now() + ttlSeconds * 1000);
-    return true;
+
+    if (map.size >= this.maxEntries) {
+      const oldestKey = map.keys().next().value;
+      if (oldestKey !== undefined) map.delete(oldestKey);
+    }
   }
 }
 
@@ -340,14 +347,11 @@ function getDefaultStorage(): MemoryBotStorage {
 }
 
 export async function signVisitorToken(
-  payload: {
-    id: string;
-    firstSeen: number;
-    lastSeen: number;
-    rollingRisk: number;
-  },
+  payload: { id: string },
   secret: string,
 ): Promise<string> {
+  validateSecrets(secret);
+  if (!payload.id) throw new TypeError("visitor id is required");
   const body = base64UrlEncode(JSON.stringify(payload));
   const signature = await hmac(body, secret);
   return `${body}.${signature}`;
@@ -356,23 +360,18 @@ export async function signVisitorToken(
 export async function verifyVisitorToken(
   token: string,
   secrets: string | string[],
-): Promise<{
-  id: string;
-  firstSeen: number;
-  lastSeen: number;
-  rollingRisk: number;
-} | null> {
-  const [body, signature] = token.split(".");
+): Promise<{ id: string } | null> {
+  validateSecrets(secrets);
+  const parts = token.split(".");
+  if (parts.length !== 2) return null;
+  const [body, signature] = parts;
   if (!body || !signature) return null;
 
   for (const secret of Array.isArray(secrets) ? secrets : [secrets]) {
-    if ((await hmac(body, secret)) === signature) {
+    if (await verifyHmac(body, signature, secret)) {
       try {
         const payload = JSON.parse(base64UrlDecode(body));
-        if (
-          typeof payload.id === "string" &&
-          typeof payload.firstSeen === "number"
-        ) {
+        if (typeof payload.id === "string" && payload.id.length > 0) {
           return payload;
         }
       } catch {
@@ -396,11 +395,13 @@ async function verifyChallengePassToken(
   token: string,
   secrets: string | string[],
 ): Promise<{ id: string; expiresAt: number } | null> {
-  const [body, signature] = token.split(".");
+  const parts = token.split(".");
+  if (parts.length !== 2) return null;
+  const [body, signature] = parts;
   if (!body || !signature) return null;
 
   for (const secret of Array.isArray(secrets) ? secrets : [secrets]) {
-    if ((await hmac(body, secret)) === signature) {
+    if (await verifyHmac(body, signature, secret)) {
       try {
         const payload = JSON.parse(base64UrlDecode(body));
         if (
@@ -439,16 +440,6 @@ function matchesProtectedRoute(
   );
 }
 
-function getClientIp(request: Request, trustedProxies: string[] = []): string {
-  if (trustedProxies.length === 0) return "unknown";
-  return (
-    request.headers.get("cf-connecting-ip") ??
-    request.headers.get("x-real-ip") ??
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-    "unknown"
-  );
-}
-
 function getCookie(request: Request, name: string): string | null {
   const cookie = request.headers.get("cookie");
   if (!cookie) return null;
@@ -476,6 +467,70 @@ function firstSecret(secret: string | string[]): string {
   return Array.isArray(secret) ? secret[0] : secret;
 }
 
+function validateConfig(config: NoSkrapConfig): void {
+  validateSecrets(config.secret);
+  if (
+    config.mode !== undefined &&
+    !["observe", "enforce"].includes(config.mode)
+  ) {
+    throw new TypeError('mode must be "observe" or "enforce"');
+  }
+
+  if (
+    config.getClientIp !== undefined &&
+    typeof config.getClientIp !== "function"
+  ) {
+    throw new TypeError("getClientIp must be a function");
+  }
+
+  const thresholds = config.thresholds ?? DEFAULT_THRESHOLDS;
+  if (
+    ![thresholds.observe, thresholds.challenge, thresholds.block].every(
+      (value) => Number.isFinite(value) && value >= 0 && value <= 100,
+    ) ||
+    thresholds.observe > thresholds.challenge ||
+    thresholds.challenge > thresholds.block
+  ) {
+    throw new TypeError(
+      "thresholds must be ordered numbers between 0 and 100",
+    );
+  }
+
+  if (
+    config.challengeTtlSeconds !== undefined &&
+    (!Number.isInteger(config.challengeTtlSeconds) ||
+      config.challengeTtlSeconds < 1)
+  ) {
+    throw new TypeError("challengeTtlSeconds must be a positive integer");
+  }
+
+  for (const rule of config.rules ?? []) {
+    if (
+      typeof rule.id !== "string" ||
+      rule.id.length === 0 ||
+      (rule.score !== undefined &&
+        (!Number.isFinite(rule.score) || rule.score < 0))
+    ) {
+      throw new TypeError("rules require an id and a non-negative score");
+    }
+  }
+}
+
+function validateSecrets(secret: string | string[]): void {
+  const secrets = Array.isArray(secret) ? secret : [secret];
+  if (
+    secrets.length === 0 ||
+    secrets.some(
+      (secret) =>
+        typeof secret !== "string" || secret.length < MIN_SECRET_LENGTH,
+    )
+  ) {
+    throw new TypeError(
+      `secret must contain at least ${MIN_SECRET_LENGTH} characters`,
+    );
+  }
+}
+
 function createId(): string {
   const bytes = new Uint8Array(12);
   crypto.getRandomValues(bytes);
@@ -483,19 +538,43 @@ function createId(): string {
 }
 
 async function hmac(value: string, secret: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    await importHmacKey(secret),
+    new TextEncoder().encode(value),
+  );
+  return base64UrlEncode(String.fromCharCode(...new Uint8Array(signature)));
+}
+
+async function importHmacKey(secret: string): Promise<CryptoKey> {
+  return crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(secret),
     { name: "HMAC", hash: "SHA-256" },
     false,
-    ["sign"],
+    ["sign", "verify"],
   );
-  const signature = await crypto.subtle.sign(
-    "HMAC",
-    key,
-    new TextEncoder().encode(value),
-  );
-  return base64UrlEncode(String.fromCharCode(...new Uint8Array(signature)));
+}
+
+async function verifyHmac(
+  value: string,
+  signature: string,
+  secret: string,
+): Promise<boolean> {
+  try {
+    const bytes = Uint8Array.from(
+      base64UrlDecode(signature),
+      (character) => character.charCodeAt(0),
+    );
+    return crypto.subtle.verify(
+      "HMAC",
+      await importHmacKey(secret),
+      bytes,
+      new TextEncoder().encode(value),
+    );
+  } catch {
+    return false;
+  }
 }
 
 function base64UrlEncode(value: string): string {

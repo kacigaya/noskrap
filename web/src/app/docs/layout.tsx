@@ -35,7 +35,15 @@ export default function DocsLayout({
             <DocsSidebar />
           </div>
         </aside>
-        <main className="min-w-0 flex-1 py-10">{children}</main>
+        <main className="min-w-0 flex-1 py-6 md:py-10">
+          <details className="mb-8 rounded-xl border p-4 md:hidden">
+            <summary className="cursor-pointer font-medium">Documentation</summary>
+            <div className="mt-4">
+              <DocsSidebar />
+            </div>
+          </details>
+          {children}
+        </main>
       </div>
     </div>
   );

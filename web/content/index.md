@@ -20,6 +20,7 @@ export const config = {
 export const proxy = createNoSkrapProxy({
   secret: process.env.NOSKRAP_SECRET!,
   protectedRoutes: ["/api/search", "/login", "/checkout"],
+  onDecision: (result) => console.info("noskrap", result),
 });
 ```
 

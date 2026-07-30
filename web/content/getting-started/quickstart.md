@@ -15,6 +15,7 @@ export const config = {
 export const proxy = createNoSkrapProxy({
   secret: process.env.NOSKRAP_SECRET!,
   protectedRoutes: ["/api/search", "/login", "/checkout"],
+  onDecision: (result) => console.info("noskrap", result),
 });
 ```
 
@@ -51,13 +52,14 @@ import { createNoSkrapTelemetryHandler } from "noskrap/next";
 
 export const POST = createNoSkrapTelemetryHandler({
   secret: process.env.NOSKRAP_SECRET!,
+  verifyTelemetry: (request) => verifyYourTelemetryToken(request),
 });
 ```
 
 ```ts
 fetch("/api/noskrap/telemetry", {
   method: "POST",
-  body: JSON.stringify({ pageView: true, interacted: true }),
+  body: JSON.stringify({ interacted: true }),
 });
 ```
 

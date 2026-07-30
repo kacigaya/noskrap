@@ -1,6 +1,12 @@
 {
   "name": "noskrap",
   "version": "0.1.5",
+  "description": "Explainable bot-risk scoring for Next.js applications",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kacigaya/noskrap.git"
+  },
   "type": "module",
   "exports": {
     "./core": {
@@ -22,7 +28,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "bun test",
-    "check": "bun run build && bun test"
+    "check": "bun run build && bun test",
+    "prepack": "bun run build"
   },
   "peerDependencies": {
     "next": ">=15"

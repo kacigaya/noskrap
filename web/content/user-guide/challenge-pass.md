@@ -12,8 +12,12 @@ import { createNoSkrapChallengePassHandler } from "noskrap/next";
 
 export const POST = createNoSkrapChallengePassHandler({
   secret: process.env.NOSKRAP_SECRET!,
+  verifyChallenge: (request) => verifyYourCaptcha(request),
 });
 ```
+
+`verifyChallenge` is required and runs before NoSkrap issues a pass. The
+request must also contain the signed visitor cookie created by the proxy.
 
 ## Proxy with challenge path
 
@@ -36,6 +40,7 @@ The pass defaults to 10 minutes.
 createNoSkrapChallengePassHandler({
   secret: process.env.NOSKRAP_SECRET!,
   challengeTtlSeconds: 5 * 60,
+  verifyChallenge: (request) => verifyYourCaptcha(request),
 });
 ```
 

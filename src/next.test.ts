@@ -1,9 +1,19 @@
-import { expect, test } from "bun:test";
+import { expect, mock, test } from "bun:test";
 import {
   createNoSkrapChallengePassHandler,
+  createNoSkrapProxy,
   createNoSkrapTelemetryHandler,
   getNoSkrapDecision,
 } from "./next";
+
+const SECRET = "test-secret-with-at-least-32-bytes";
+
+mock.module("next/server", () => ({
+  NextResponse: {
+    next: () => new Response(null),
+    redirect: (url: URL) => Response.redirect(url),
+  },
+}));
 
 test("route handler helper returns core decision", async () => {
   const result = await getNoSkrapDecision(
@@ -15,7 +25,7 @@ test("route handler helper returns core decision", async () => {
         "user-agent": "Mozilla/5.0 Chrome/120 Safari/537.36",
       },
     }),
-    { secret: "test-secret-with-enough-bytes" },
+    { secret: SECRET },
   );
 
   expect(result.decision).toBe("allow");
@@ -24,7 +34,8 @@ test("route handler helper returns core decision", async () => {
 
 test("telemetry handler records interaction and returns cookie", async () => {
   const handler = createNoSkrapTelemetryHandler({
-    secret: "test-secret-with-enough-bytes",
+    secret: SECRET,
+    verifyTelemetry: () => true,
   });
   const response = await handler(
     new Request("https://example.test/api/noskrap/telemetry", {
@@ -39,16 +50,92 @@ test("telemetry handler records interaction and returns cookie", async () => {
 
 test("challenge pass handler returns visitor and challenge cookies", async () => {
   const handler = createNoSkrapChallengePassHandler({
-    secret: "test-secret-with-enough-bytes",
+    secret: SECRET,
+    verifyChallenge: () => true,
   });
+  const visitor = await getNoSkrapDecision(
+    new Request("https://example.test/"),
+    { secret: SECRET },
+  );
+  const visitorCookie = visitor.headers.get("set-cookie")?.split(";")[0] ?? "";
   const response = await handler(
     new Request("https://example.test/api/noskrap/challenge-pass", {
       method: "POST",
+      headers: { cookie: visitorCookie },
     }),
   );
   const cookie = response.headers.get("set-cookie");
 
   expect(response.status).toBe(200);
-  expect(cookie).toContain("noskrap_visitor=");
   expect(cookie).toContain("noskrap_challenge=");
+});
+
+test("handlers reject unverified client claims", async () => {
+  const telemetry = createNoSkrapTelemetryHandler({
+    secret: SECRET,
+    verifyTelemetry: () => false,
+  });
+  const challenge = createNoSkrapChallengePassHandler({
+    secret: SECRET,
+    verifyChallenge: () => false,
+  });
+
+  expect(
+    (
+      await telemetry(
+        new Request("https://example.test/api/noskrap/telemetry", {
+          method: "POST",
+          body: JSON.stringify({ interacted: true }),
+        }),
+      )
+    ).status,
+  ).toBe(401);
+  expect(
+    (
+      await challenge(
+        new Request("https://example.test/api/noskrap/challenge-pass", {
+          method: "POST",
+        }),
+      )
+    ).status,
+  ).toBe(401);
+});
+
+test("proxy reports observed decisions", async () => {
+  const observations: object[] = [];
+  const proxy = createNoSkrapProxy({
+    secret: SECRET,
+    onDecision: (result) => observations.push(result),
+  });
+
+  const response = await proxy(new Request("https://example.test/"));
+
+  expect(response?.status).toBe(200);
+  expect(observations).toEqual([
+    {
+      decision: "allow",
+      score: 0,
+      reasons: [],
+      challengePassed: false,
+    },
+  ]);
+  expect("headers" in observations[0]!).toBe(false);
+  expect(response?.headers.get("set-cookie")).toContain("noskrap_visitor=");
+});
+
+test("proxy enforces block decisions", async () => {
+  const proxy = createNoSkrapProxy({
+    secret: SECRET,
+    mode: "enforce",
+    protectedRoutes: ["/api/search"],
+  });
+
+  const response = await proxy(
+    new Request("https://example.test/api/search", {
+      method: "POST",
+      headers: { "user-agent": "curl/8.0" },
+    }),
+  );
+
+  expect(response?.status).toBe(403);
 });

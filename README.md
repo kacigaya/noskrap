@@ -43,6 +43,7 @@ export default createNoSkrapProxy({
   mode: "enforce",
   protectedRoutes: ["/api/search", "/login", "/checkout"],
   challengePath: "/bot-check",
+  onDecision: (result) => console.info("noskrap", result),
 });
 ```
 
@@ -56,10 +57,13 @@ import { createNoSkrapChallengePassHandler } from "noskrap/next";
 
 export const POST = createNoSkrapChallengePassHandler({
   secret: process.env.NOSKRAP_SECRET!,
+  verifyChallenge: (request) => verifyYourCaptcha(request),
 });
 ```
 
-The pass only downgrades future `challenge` decisions to `allow`; `block` decisions still block.
+`verifyChallenge` is required and must validate your CAPTCHA or equivalent
+server-side proof. The pass only downgrades future `challenge` decisions to
+`allow`; `block` decisions still block.
 
 ## Route handlers
 
@@ -131,6 +135,7 @@ import { createNoSkrapTelemetryHandler } from "noskrap/next";
 
 export const POST = createNoSkrapTelemetryHandler({
   secret: process.env.NOSKRAP_SECRET!,
+  verifyTelemetry: (request) => verifyYourTelemetryToken(request),
 });
 ```
 
@@ -139,11 +144,11 @@ Send coarse interaction state from your app:
 ```ts
 fetch("/api/noskrap/telemetry", {
   method: "POST",
-  body: JSON.stringify({ pageView: true, interacted: true }),
+  body: JSON.stringify({ interacted: true }),
 });
 ```
 
-NoSkrap stores only coarse timestamps for page view and interaction state.
+NoSkrap stores only the latest coarse interaction timestamp.
 
 ## Bot detected popup
 
@@ -164,7 +169,7 @@ interface NoSkrapConfig {
   protectedRoutes?: string[];
   challengePath?: string;
   challengeTtlSeconds?: number;
-  trustedProxies?: string[];
+  getClientIp?: (request: Request) => string | null | undefined;
   storage?: BotStorage;
   thresholds?: {
     observe: number;
@@ -174,6 +179,11 @@ interface NoSkrapConfig {
   rules?: RuleConfig[];
 }
 ```
+
+Secrets must contain at least 32 characters. Configure `getClientIp` only with
+an address supplied by infrastructure you trust; NoSkrap does not trust
+forwarded headers automatically. `onDecision` receives the decision, score,
+reasons, and challenge status, but never cookie headers.
 
 Rules can be disabled or rescored:
 
@@ -192,7 +202,8 @@ createNoSkrapProxy({
 - Visitor cookies are HMAC signed.
 - Cookie defaults are `HttpOnly`, `Secure`, `SameSite=Lax`, and `Path=/`.
 - Raw secrets, full cookies, and raw challenge tokens should not be logged.
-- Default storage is in-memory and process-local; use a production adapter when one exists.
+- Default storage is bounded, in-memory, and process-local; provide a shared
+  `BotStorage` when running more than one process.
 - NoSkrap is risk scoring, not guaranteed bot blocking.
 
 ## Development

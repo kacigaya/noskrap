@@ -10,8 +10,13 @@ import { createNoSkrapTelemetryHandler } from "noskrap/next";
 
 export const POST = createNoSkrapTelemetryHandler({
   secret: process.env.NOSKRAP_SECRET!,
+  verifyTelemetry: (request) => verifyYourTelemetryToken(request),
 });
 ```
+
+`verifyTelemetry` is required. Use an authenticated session or a short-lived
+token issued by your app; the client-provided interaction flag is not proof of
+humanity by itself.
 
 ## Client beacon
 
@@ -22,7 +27,7 @@ import { useEffect } from "react";
 
 export function NoSkrapBeacon() {
   useEffect(() => {
-    const send = (payload: { pageView?: boolean; interacted?: boolean }) => {
+    const send = (payload: { interacted: boolean }) => {
       void fetch("/api/noskrap/telemetry", {
         method: "POST",
         body: JSON.stringify(payload),
@@ -30,7 +35,6 @@ export function NoSkrapBeacon() {
     };
     const interact = () => send({ interacted: true });
 
-    send({ pageView: true });
     window.addEventListener("pointerdown", interact, { once: true });
     window.addEventListener("keydown", interact, { once: true });
 
@@ -44,4 +48,4 @@ export function NoSkrapBeacon() {
 }
 ```
 
-Recent interaction lowers risk for protected state-changing requests.
+Recent verified interaction lowers risk for protected state-changing requests.
