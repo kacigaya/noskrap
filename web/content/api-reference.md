@@ -30,6 +30,20 @@ NoSkrap exports three entrypoints.
 | --- | --- |
 | `showBotDetectedPopup(result, options?)` | Shows a popup for configured decisions. |
 
+## Core example
+
+```ts
+import { MemoryBotStorage, scoreRequest } from "noskrap/core";
+
+const result = await scoreRequest(request, {
+  secret: process.env.NOSKRAP_SECRET!,
+  storage: new MemoryBotStorage(),
+  protectedRoutes: ["/api/search"],
+});
+
+console.log(result.decision, result.score, result.reasons);
+```
+
 ## Config
 
 ```ts
@@ -66,4 +80,38 @@ interface BotResult {
   challengePassed: boolean;
   headers: Headers;
 }
+```
+
+## Scoring
+
+Default score bands:
+
+| Score | Decision |
+| ---: | --- |
+| 0-29 | `allow` |
+| 30-59 | `observe` |
+| 60-84 | `challenge` |
+| 85+ | `block` |
+
+Built-in signals cover:
+
+- missing browser headers on HTML navigation
+- automation user-agent tokens
+- user-agent and Client Hints platform mismatch
+- weak fetch metadata on protected state-changing requests
+- missing visitor-cookie continuity on protected routes
+- protected state-changing requests without recent interaction
+- route bursts per visitor and, when configured, IP address
+
+Each contribution includes a stable `ruleId` and score. Rules can be disabled
+or rescored:
+
+```ts
+createNoSkrapProxy({
+  secret: process.env.NOSKRAP_SECRET!,
+  rules: [
+    { id: "browser.automationUa", score: 20 },
+    { id: "headers.uaClientHintsMismatch", enabled: false },
+  ],
+});
 ```

@@ -31,3 +31,14 @@ Use secret rotation by passing an array. The first secret signs new cookies; all
 ```ts
 secret: [process.env.NOSKRAP_SECRET!, process.env.NOSKRAP_OLD_SECRET!]
 ```
+
+## Production notes
+
+- Visitor cookies are HMAC signed and use `HttpOnly`, `Secure`,
+  `SameSite=Lax`, and `Path=/`.
+- Never log raw secrets, complete cookies, or challenge tokens.
+- Default storage is bounded, in-memory, and process-local. Provide a shared
+  `BotStorage` when running more than one process.
+- Configure client IP resolution only from infrastructure-provided values you
+  trust.
+- NoSkrap is risk scoring, not guaranteed bot blocking.

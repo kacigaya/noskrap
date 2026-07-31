@@ -49,3 +49,4 @@ Use observe mode to learn what normal traffic looks like. Turn on enforce mode w
 - [Challenge Pass](/docs/user-guide/challenge-pass)
 - [Client Popup](/docs/user-guide/client-popup)
 - [API Reference](/docs/api-reference)
+- [Development](/docs/development)

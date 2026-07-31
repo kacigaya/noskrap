@@ -1,6 +1,7 @@
 # Telemetry
 
-Telemetry records coarse visitor behavior. NoSkrap stores timestamps for page views and recent interactions.
+Telemetry records coarse visitor behavior. NoSkrap stores only the latest
+verified interaction timestamp.
 
 ## Route handler
 

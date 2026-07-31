@@ -34,7 +34,7 @@ const FEATURES = [
   {
     title: "Ask for coarse signals",
     description:
-      "Record page views and recent interaction timestamps, not full event streams.",
+      "Record recent interaction timestamps, not full event streams.",
   },
   {
     title: "Tell users what happened",
