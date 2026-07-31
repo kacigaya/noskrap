@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="./assets/logo.svg" alt="NoSkrap logo" width="160" />
+  <img src="assets/logo.svg" alt="NoSkrap logo" width="200">
 </p>
 
 <h1 align="center">NoSkrap</h1>
 
 <p align="center">
-  TypeScript bot-risk scoring for Next.js apps.<br>
-  Explainable decisions: <code>allow</code>, <code>observe</code>, <code>challenge</code>, or <code>block</code>.
+  <strong>TypeScript bot-risk scoring for Next.js, with explainable request signals,
+  signed visitor continuity, route velocity, interaction telemetry, and challenge passes.</strong>
 </p>
 
 ## Install
@@ -31,16 +31,12 @@ export const proxy = createNoSkrapProxy({
 });
 ```
 
-NoSkrap starts in observe mode, so it scores traffic without blocking it.
-
 ## Documentation
 
-See the [full documentation](https://kacigaya.github.io/noskrap/docs/) for
-enforcement, challenge passes, telemetry, storage, configuration, security,
-and the API reference.
-
-NoSkrap is risk scoring, not guaranteed bot blocking.
-
-## License
-
-[MIT](LICENSE)
+- [Quickstart](https://kacigaya.github.io/noskrap/docs/getting-started/quickstart/)
+- [Next Proxy](https://kacigaya.github.io/noskrap/docs/user-guide/next-proxy/)
+- [Route Handlers](https://kacigaya.github.io/noskrap/docs/user-guide/route-handlers/)
+- [Telemetry](https://kacigaya.github.io/noskrap/docs/user-guide/telemetry/)
+- [Challenge Pass](https://kacigaya.github.io/noskrap/docs/user-guide/challenge-pass/)
+- [API Reference](https://kacigaya.github.io/noskrap/docs/api-reference/)
+- [Development](https://kacigaya.github.io/noskrap/docs/development/)
