@@ -1,8 +1,9 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist_Mono, Inter } from "next/font/google";
 import "./globals.css";
 import { cn } from "@/lib/utils";
 import { ThemeProvider } from "@/components/theme-provider";
+import { SITE_DESCRIPTION, SITE_NAME, SITE_URL } from "@/lib/site";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -14,10 +15,37 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const TITLE = "NoSkrap — TypeScript bot-risk framework";
+
 export const metadata: Metadata = {
-  title: "NoSkrap — TypeScript bot-risk framework",
-  description:
-    "NoSkrap scores Next.js requests with explainable bot-risk signals, signed visitor continuity, interaction telemetry, challenge passes, and enforce-mode redirects.",
+  metadataBase: new URL(SITE_URL),
+  title: {
+    default: TITLE,
+    template: `%s — ${SITE_NAME}`,
+  },
+  description: SITE_DESCRIPTION,
+  applicationName: SITE_NAME,
+  alternates: { canonical: "/" },
+  robots: { index: true, follow: true },
+  openGraph: {
+    type: "website",
+    siteName: SITE_NAME,
+    url: "/",
+    title: TITLE,
+    description: SITE_DESCRIPTION,
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: TITLE,
+    description: SITE_DESCRIPTION,
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
+  ],
 };
 
 export default function RootLayout({

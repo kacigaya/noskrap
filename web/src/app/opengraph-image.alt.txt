@@ -1,0 +1,1 @@
+NoSkrap — explainable bot-risk scoring for Next.js
