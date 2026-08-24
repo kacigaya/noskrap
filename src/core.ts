@@ -66,6 +66,7 @@ const RATE_WINDOW_SECONDS = 60;
 const INTERACTION_TTL_MS = 10 * 60 * 1000;
 const MIN_SECRET_LENGTH = 32;
 let defaultMemoryStorage: MemoryBotStorage | undefined;
+let warnedAboutDefaultStorage = false;
 
 export async function scoreRequest(
   request: Request,
@@ -341,7 +342,19 @@ export function decisionForScore(
   return "allow";
 }
 
+// The fallback keeps state in this process only, so a deployment that runs more
+// than one instance silently loses rate limiting and interaction continuity.
+// Warn once per runtime rather than per request.
 function getDefaultStorage(): MemoryBotStorage {
+  if (!warnedAboutDefaultStorage) {
+    warnedAboutDefaultStorage = true;
+    console.warn(
+      "NoSkrap: no `storage` configured, falling back to in-memory storage. " +
+        "State is process-local, so rate limiting and interaction continuity " +
+        "degrade on serverless, edge, and multi-instance deployments. " +
+        "Pass a shared `storage` implementation in production.",
+    );
+  }
   defaultMemoryStorage ??= new MemoryBotStorage();
   return defaultMemoryStorage;
 }
