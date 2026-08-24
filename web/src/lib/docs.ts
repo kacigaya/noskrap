@@ -51,7 +51,9 @@ function extractDescription(markdown: string): string {
   if (text.length <= MAX_DESCRIPTION_LENGTH) return text;
 
   const clipped = text.slice(0, MAX_DESCRIPTION_LENGTH);
-  return `${clipped.slice(0, clipped.lastIndexOf(" ")).trimEnd()}…`;
+  const lastSpace = clipped.lastIndexOf(" ");
+  const trimmed = lastSpace > 0 ? clipped.slice(0, lastSpace) : clipped;
+  return `${trimmed.trimEnd()}…`;
 }
 
 export async function getDoc(slug: string[]): Promise<RenderedDoc | null> {
