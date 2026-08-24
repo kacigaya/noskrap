@@ -15,7 +15,7 @@ export function DocsSidebar() {
   const pathname = normalize(usePathname());
 
   return (
-    <nav className="flex flex-col gap-6 text-sm">
+    <nav aria-label="Documentation" className="flex flex-col gap-6 text-sm">
       {NAV.map((section, i) => (
         <div key={section.title ?? i} className="flex flex-col gap-1">
           {section.title && (

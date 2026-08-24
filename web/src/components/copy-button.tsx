@@ -9,9 +9,18 @@ export function CopyButton({ text }: { text: string }) {
   return (
     <button
       type="button"
-      aria-label="Copy code"
+      // The icon swap is the only visual feedback, so the name has to carry it
+      // for anyone who cannot see it.
+      aria-label={copied ? "Copied" : "Copy code"}
       onClick={async () => {
-        await navigator.clipboard.writeText(text);
+        // Absent outside secure contexts, and can reject when the page lacks
+        // clipboard permission.
+        if (!navigator.clipboard) return;
+        try {
+          await navigator.clipboard.writeText(text);
+        } catch {
+          return;
+        }
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
       }}

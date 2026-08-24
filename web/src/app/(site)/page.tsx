@@ -58,7 +58,7 @@ const INSTALL = `bun add noskrap`;
 
 export default function Home() {
   return (
-    <main className="flex flex-1 flex-col">
+    <main id="main-content" className="flex flex-1 flex-col">
       {/* Nav */}
       <header className="sticky top-0 z-20 px-4 pt-4">
         <div className="mx-auto flex w-full max-w-6xl items-center justify-between rounded-2xl border bg-background/70 px-5 py-3 shadow-sm backdrop-blur-md">
@@ -66,7 +66,7 @@ export default function Home() {
             <Image src={asset("/noskrap-logo.svg")} alt="NoSkrap" width={28} height={28} />
             <span className="font-semibold tracking-tight">NoSkrap</span>
           </div>
-          <nav className="flex items-center gap-2">
+          <nav aria-label="Main" className="flex items-center gap-2">
             <ThemeToggle />
             <Button variant="ghost" size="sm" render={<Link href={DOCS_URL} />}>
               Docs
@@ -142,7 +142,7 @@ export default function Home() {
       <footer className="mt-auto border-t">
         <div className="mx-auto flex w-full max-w-5xl flex-col items-center justify-between gap-4 px-6 py-8 text-sm text-muted-foreground sm:flex-row">
           <span>© {new Date().getFullYear()} NoSkrap · MIT</span>
-          <nav className="flex items-center gap-5">
+          <nav aria-label="Footer" className="flex items-center gap-5">
             <Link href={DOCS_URL} className="hover:text-foreground">
               Documentation
             </Link>

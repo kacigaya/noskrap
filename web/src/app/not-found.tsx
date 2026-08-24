@@ -13,7 +13,7 @@ export const metadata: Metadata = {
 // page visitors land on after a renamed or mistyped docs URL.
 export default function NotFound() {
   return (
-    <main className="flex min-h-full flex-1 flex-col items-center justify-center px-6 py-24 text-center">
+    <main id="main-content" className="flex min-h-full flex-1 flex-col items-center justify-center px-6 py-24 text-center">
       <p className="font-mono text-sm text-muted-foreground">404</p>
       <h1 className="mt-4 font-heading text-4xl font-bold tracking-tight">
         This page does not exist

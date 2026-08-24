@@ -20,7 +20,7 @@ export default function DocsLayout({
             <Image src={asset("/noskrap-logo.svg")} alt="NoSkrap" width={28} height={28} />
             <span className="font-semibold tracking-tight">NoSkrap</span>
           </Link>
-          <nav className="flex items-center gap-2">
+          <nav aria-label="Main" className="flex items-center gap-2">
             <ThemeToggle />
             <Button variant="outline" size="sm" render={<a href={GITHUB_URL} />}>
               GitHub
@@ -35,7 +35,7 @@ export default function DocsLayout({
             <DocsSidebar />
           </div>
         </aside>
-        <main className="min-w-0 flex-1 py-6 md:py-10">
+        <main id="main-content" className="min-w-0 flex-1 py-6 md:py-10">
           <details className="mb-8 rounded-xl border p-4 md:hidden">
             <summary className="cursor-pointer font-medium">Documentation</summary>
             <div className="mt-4">

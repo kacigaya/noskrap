@@ -23,10 +23,19 @@ export function CodeCopy() {
       btn.className =
         "absolute right-3 top-3 z-10 inline-flex size-7 items-center justify-center rounded-md border bg-background/80 text-muted-foreground backdrop-blur transition-colors hover:text-foreground";
       btn.addEventListener("click", async () => {
-        await navigator.clipboard.writeText(text);
+        // Absent outside secure contexts, and can reject when the page lacks
+        // clipboard permission.
+        if (!navigator.clipboard) return;
+        try {
+          await navigator.clipboard.writeText(text);
+        } catch {
+          return;
+        }
         btn.innerHTML = CHECK_SVG;
+        btn.setAttribute("aria-label", "Copied");
         setTimeout(() => {
           btn.innerHTML = COPY_SVG;
+          btn.setAttribute("aria-label", "Copy code");
         }, 1500);
       });
       pre.appendChild(btn);
