@@ -18,7 +18,7 @@ NoSkrap ships ESM exports:
 
 - Next.js 15 or newer for `noskrap/next`.
 - A secret of at least 32 characters in `NOSKRAP_SECRET`.
-- A production storage adapter when in-memory process-local storage is not enough.
+- A shared `BotStorage` adapter for any deployment that runs more than one instance.
 
 ## Environment
 
@@ -37,8 +37,9 @@ secret: [process.env.NOSKRAP_SECRET!, process.env.NOSKRAP_OLD_SECRET!]
 - Visitor cookies are HMAC signed and use `HttpOnly`, `Secure`,
   `SameSite=Lax`, and `Path=/`.
 - Never log raw secrets, complete cookies, or challenge tokens.
-- Default storage is bounded, in-memory, and process-local. Provide a shared
-  `BotStorage` when running more than one process.
+- Omitting `storage` falls back to bounded, in-memory, process-local storage and
+  logs a warning. Rate limiting and interaction continuity degrade silently
+  across instances, so provide a shared `BotStorage` in production.
 - Configure client IP resolution only from infrastructure-provided values you
   trust.
 - NoSkrap is risk scoring, not guaranteed bot blocking.

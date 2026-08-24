@@ -20,7 +20,7 @@ NoSkrap exports three entrypoints.
 | `createChallengePassHeaders(request, config)` | Creates a challenge pass cookie for an existing signed visitor. |
 | `verifyChallengePass(request, config)` | Checks a signed challenge pass cookie. |
 | `decisionForScore(score, thresholds?)` | Maps a numeric score to a decision. |
-| `MemoryBotStorage` | Process-local storage for development and tests. |
+| `MemoryBotStorage` | Process-local storage for development and tests. Used implicitly when `storage` is omitted. |
 | `signVisitorToken(payload, secret)` | Signs a visitor token. |
 | `verifyVisitorToken(token, secrets)` | Verifies a visitor token with one or more secrets. |
 
@@ -37,12 +37,35 @@ import { MemoryBotStorage, scoreRequest } from "noskrap/core";
 
 const result = await scoreRequest(request, {
   secret: process.env.NOSKRAP_SECRET!,
+  // Process-local. See Storage below before using this in production.
   storage: new MemoryBotStorage(),
   protectedRoutes: ["/api/search"],
 });
 
 console.log(result.decision, result.score, result.reasons);
 ```
+
+## Storage
+
+`scoreRequest` and `recordTelemetry` keep visitor state and route counters in
+the `BotStorage` you pass as `storage`. Omit it and both fall back to one shared
+`MemoryBotStorage` instance, logging a warning the first time they do.
+
+That fallback holds everything in the current process. It suits local
+development, tests, and a single long-lived instance. On serverless, edge, or
+any horizontally scaled deployment, each instance starts with an empty store,
+and the two rules that read stored state degrade without failing:
+
+- `rate.routeBurst` counts requests per IP and per visitor inside a 60 second
+  window. Split across instances, each counter sees a fraction of the traffic,
+  so the effective limit rises with the instance count.
+- `behavior.noRecentInteraction` reads the last verified interaction timestamp.
+  A visitor who interacted on one instance looks inactive on the next.
+
+Neither rule reports an error when this happens; the scores simply come out
+lower than they should. In production, pass a `BotStorage` backed by shared,
+persistent infrastructure such as Redis, a database, or your platform's KV
+store.
 
 ## Config
 
