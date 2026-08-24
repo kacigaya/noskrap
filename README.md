@@ -13,6 +13,7 @@
   <a href="https://www.typescriptlang.org"><img alt="TypeScript 5.9" src="https://shieldcn.dev/badge/TypeScript-5.9-3178c6.svg?variant=secondary&amp;logo=typescript"></a>
   <a href="https://nextjs.org"><img alt="Next.js 15+" src="https://shieldcn.dev/badge/Next.js-15+-171717.svg?variant=secondary&amp;logo=nextdotjs"></a>
   <a href="https://bun.sh"><img alt="Bun 1.3" src="https://shieldcn.dev/badge/Bun-1.3-fbf0df.svg?variant=secondary&amp;logo=bun&amp;logoColor=171717"></a>
+  <a href="https://github.com/kacigaya/noskrap/actions/workflows/ci.yml"><img alt="CI status" src="https://shieldcn.dev/github/ci/kacigaya/noskrap.svg?variant=secondary&amp;workflow=ci.yml&amp;branch=main"></a>
   <a href="https://github.com/kacigaya/noskrap/blob/main/LICENSE"><img alt="MIT License" src="https://shieldcn.dev/github/license/kacigaya/noskrap.svg?variant=secondary"></a>
 </p>
 
