@@ -5,8 +5,14 @@ import { usePathname } from "next/navigation";
 import { NAV } from "@/lib/docs-nav";
 import { cn } from "@/lib/utils";
 
+// `trailingSlash: true` makes usePathname return "/docs/x/", so compare on a
+// slash-free form instead of the raw nav href.
+function normalize(pathname: string): string {
+  return pathname.replace(/\/+$/, "") || "/";
+}
+
 export function DocsSidebar() {
-  const pathname = usePathname();
+  const pathname = normalize(usePathname());
 
   return (
     <nav className="flex flex-col gap-6 text-sm">
@@ -18,11 +24,12 @@ export function DocsSidebar() {
             </p>
           )}
           {section.items.map((item) => {
-            const active = pathname === item.href;
+            const active = pathname === normalize(item.href);
             return (
               <Link
                 key={item.href}
                 href={item.href}
+                aria-current={active ? "page" : undefined}
                 className={cn(
                   "rounded-md px-2 py-1.5 transition-colors",
                   active
