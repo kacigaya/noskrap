@@ -29,6 +29,53 @@ export interface NoSkrapChallengePassConfig extends NoSkrapConfig {
   verifyChallenge: (request: Request) => boolean | Promise<boolean>;
 }
 
+const MAX_TELEMETRY_BYTES = 1024;
+
+function isTelemetryPayload(value: unknown): value is { interacted: boolean } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Record<string, unknown>).interacted === "boolean"
+  );
+}
+
+// `content-length` is client-supplied and absent entirely on chunked requests,
+// so it cannot be the only guard. Read the stream and give up once the cap is
+// passed, rather than buffering whatever the client decides to send.
+async function readBodyWithLimit(
+  request: Request,
+  limit: number,
+): Promise<string | null> {
+  if (!request.body) return "";
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const buffer = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    buffer.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(buffer);
+}
+
 export async function getNoSkrapDecision(
   request: Request,
   config: NoSkrapConfig,
@@ -94,21 +141,28 @@ export function createNoSkrapTelemetryHandler(config: NoSkrapTelemetryConfig) {
       return new Response("Method Not Allowed", { status: 405 });
     }
 
-    const contentLength = Number(request.headers.get("content-length") ?? 0);
-    if (contentLength > 1024) {
+    // Fast path for clients that honestly declare an oversized body.
+    const contentLength = Number(request.headers.get("content-length"));
+    if (contentLength > MAX_TELEMETRY_BYTES) {
       return new Response("Payload Too Large", { status: 413 });
     }
 
-    const body = await request.json().catch(() => null);
-    if (
-      !body ||
-      typeof body !== "object" ||
-      typeof body.interacted !== "boolean"
-    ) {
+    const raw = await readBodyWithLimit(request, MAX_TELEMETRY_BYTES);
+    if (raw === null) {
+      return new Response("Payload Too Large", { status: 413 });
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return Response.json({ error: "invalid payload" }, { status: 400 });
+    }
+    if (!isTelemetryPayload(parsed)) {
       return Response.json({ error: "invalid payload" }, { status: 400 });
     }
 
-    const payload = { interacted: body.interacted };
+    const payload = { interacted: parsed.interacted };
     if (!(await config.verifyTelemetry(request, payload))) {
       return Response.json({ error: "unauthorized" }, { status: 401 });
     }

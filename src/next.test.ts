@@ -139,3 +139,58 @@ test("proxy enforces block decisions", async () => {
 
   expect(response?.status).toBe(403);
 });
+
+test("telemetry handler rejects an oversized streamed body", async () => {
+  // No content-length header, so only a limit applied while reading can catch
+  // this.
+  const payload = JSON.stringify({ interacted: true, pad: "x".repeat(4096) });
+  const request = new Request("https://example.test/api/noskrap/telemetry", {
+    method: "POST",
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(payload));
+        controller.close();
+      },
+    }),
+    duplex: "half",
+  } as RequestInit);
+
+  expect(request.headers.get("content-length")).toBeNull();
+
+  const handler = createNoSkrapTelemetryHandler({
+    secret: SECRET,
+    verifyTelemetry: () => true,
+  });
+
+  expect((await handler(request)).status).toBe(413);
+});
+
+test("telemetry handler rejects an oversized declared body", async () => {
+  const handler = createNoSkrapTelemetryHandler({
+    secret: SECRET,
+    verifyTelemetry: () => true,
+  });
+  const response = await handler(
+    new Request("https://example.test/api/noskrap/telemetry", {
+      method: "POST",
+      body: JSON.stringify({ interacted: true, pad: "x".repeat(4096) }),
+    }),
+  );
+
+  expect(response.status).toBe(413);
+});
+
+test("telemetry handler rejects a body that is not JSON", async () => {
+  const handler = createNoSkrapTelemetryHandler({
+    secret: SECRET,
+    verifyTelemetry: () => true,
+  });
+  const response = await handler(
+    new Request("https://example.test/api/noskrap/telemetry", {
+      method: "POST",
+      body: "not json",
+    }),
+  );
+
+  expect(response.status).toBe(400);
+});
