@@ -7,6 +7,7 @@ import remarkRehype from "remark-rehype";
 import rehypeSlug from "rehype-slug";
 import rehypePrettyCode from "rehype-pretty-code";
 import rehypeStringify from "rehype-stringify";
+import { SITE_DESCRIPTION } from "@/lib/site";
 
 export { NAV, getDocSlugs } from "@/lib/docs-nav";
 export type { NavItem, NavSection } from "@/lib/docs-nav";
@@ -27,6 +28,30 @@ const processor = unified()
 export interface RenderedDoc {
   html: string;
   title: string;
+  description: string;
+}
+
+const MAX_DESCRIPTION_LENGTH = 160;
+
+// First real paragraph of the document, flattened to plain text so it can be
+// used as a meta description. Headings, code fences, lists, and quotes are
+// skipped because they do not read as a summary.
+function extractDescription(markdown: string): string {
+  const blocks = markdown.replace(/^```[\s\S]*?^```$/gm, "").split(/\n\s*\n/);
+  const paragraph = blocks
+    .map((block) => block.trim())
+    .find((block) => block.length > 0 && !/^[#>\-*\d|]/.test(block));
+  if (!paragraph) return SITE_DESCRIPTION;
+
+  const text = paragraph
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[`*_]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length <= MAX_DESCRIPTION_LENGTH) return text;
+
+  const clipped = text.slice(0, MAX_DESCRIPTION_LENGTH);
+  return `${clipped.slice(0, clipped.lastIndexOf(" ")).trimEnd()}…`;
 }
 
 export async function getDoc(slug: string[]): Promise<RenderedDoc | null> {
@@ -44,10 +69,11 @@ export async function getDoc(slug: string[]): Promise<RenderedDoc | null> {
   }
 
   const title = raw.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? "NoSkrap Docs";
+  const description = extractDescription(raw.replace(/^#\s+.+$/m, ""));
   let html = String(await processor.process(raw));
   const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
   if (basePath) {
     html = html.replaceAll('href="/', `href="${basePath}/`);
   }
-  return { html, title };
+  return { html, title, description };
 }
