@@ -9,6 +9,21 @@ permissions:
   contents: read
 
 jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      # Both trees currently report nothing at any severity. Gate at `high` so
+      # a low-severity advisory in build tooling does not block unrelated work;
+      # run `bun audit` locally for the full picture.
+      - run: bun audit --audit-level=high
+      - run: bun install --frozen-lockfile
+        working-directory: web
+      - run: bun audit --audit-level=high
+        working-directory: web
+
   check:
     runs-on: ubuntu-latest
     steps:
