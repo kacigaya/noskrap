@@ -32,6 +32,30 @@ export const proxy = createNoSkrapProxy({
 });
 ```
 
+## Returning the visitor
+
+When the proxy redirects to `challengePath`, it appends a `next` query
+parameter holding the path and query string the visitor originally asked for.
+Send them back there once the challenge succeeds.
+
+```tsx
+// app/bot-check/page.tsx
+export default async function BotCheck({
+  searchParams,
+}: {
+  searchParams: Promise<{ next?: string }>;
+}) {
+  const { next } = await searchParams;
+  // ...
+}
+```
+
+NoSkrap always writes `next` as a same-origin absolute path, so a request for a
+protocol-relative path such as `//example.com/x` cannot turn the parameter into
+an offsite redirect. The value still comes from the client, so treat it as
+untrusted input: check it against the routes you are willing to return to
+before redirecting.
+
 ## TTL
 
 The pass defaults to 10 minutes.
