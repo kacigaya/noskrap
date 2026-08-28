@@ -179,6 +179,53 @@ test("proxy still blocks on the challenge page", async () => {
   expect(response?.status).toBe(403);
 });
 
+function challengeRedirectNext(response: Response | undefined): string {
+  const location = response?.headers.get("location");
+  expect(location).not.toBeNull();
+  return new URL(location!).searchParams.get("next") ?? "";
+}
+
+test("proxy keeps the query string in the challenge return target", async () => {
+  const proxy = createNoSkrapProxy({
+    secret: SECRET,
+    mode: "enforce",
+    challengePath: "/bot-check",
+    storage: new MemoryBotStorage(),
+    thresholds: { observe: 10, challenge: 20, block: 95 },
+  });
+
+  const response = await proxy(
+    new Request("https://example.test/api/search?q=foo", {
+      headers: { "user-agent": "HeadlessChrome/120" },
+    }),
+  );
+
+  expect(challengeRedirectNext(response)).toBe("/api/search?q=foo");
+});
+
+test("proxy keeps the challenge return target same-origin", async () => {
+  const proxy = createNoSkrapProxy({
+    secret: SECRET,
+    mode: "enforce",
+    challengePath: "/bot-check",
+    storage: new MemoryBotStorage(),
+    thresholds: { observe: 10, challenge: 20, block: 95 },
+  });
+
+  const response = await proxy(
+    new Request("https://example.test//evil.com/x", {
+      headers: { "user-agent": "HeadlessChrome/120" },
+    }),
+  );
+
+  const next = challengeRedirectNext(response);
+
+  expect(next).toBe("/evil.com/x");
+  expect(new URL(next, "https://example.test").origin).toBe(
+    "https://example.test",
+  );
+});
+
 test("telemetry handler rejects an oversized streamed body", async () => {
   // No content-length header, so only a limit applied while reading can catch
   // this.
