@@ -126,7 +126,7 @@ export function createNoSkrapProxy(config: NoSkrapProxyConfig) {
       )
     ) {
       const redirectUrl = new URL(config.challengePath, request.url);
-      redirectUrl.searchParams.set("next", new URL(request.url).pathname);
+      redirectUrl.searchParams.set("next", safeReturnTarget(request.url));
       const response = NextResponse.redirect(redirectUrl);
       copySetCookie(decision.headers, response.headers);
       return response;
@@ -227,6 +227,16 @@ function samePath(a: string, b: string): boolean {
 
 function stripTrailingSlash(path: string): string {
   return path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
+}
+
+// The challenge page gets this back as `next` and will redirect to it, so it
+// must stay same-origin whatever path the client asked for: a request path of
+// `//evil.com/x` is protocol-relative and would leave the site. One leading
+// slash keeps it a plain absolute path. The query is part of what the visitor
+// asked for; the hash never reaches the server.
+function safeReturnTarget(requestUrl: string): string {
+  const { pathname, search } = new URL(requestUrl);
+  return `/${pathname.replace(/^\/+/, "")}${search}`;
 }
 
 function copySetCookie(from: Headers, to: Headers): void {
