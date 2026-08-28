@@ -1,4 +1,5 @@
 import { expect, mock, test } from "bun:test";
+import { MemoryBotStorage } from "./core";
 import {
   createNoSkrapChallengePassHandler,
   createNoSkrapProxy,
@@ -134,6 +135,44 @@ test("proxy enforces block decisions", async () => {
     new Request("https://example.test/api/search", {
       method: "POST",
       headers: { "user-agent": "curl/8.0" },
+    }),
+  );
+
+  expect(response?.status).toBe(403);
+});
+
+test("proxy lets challenged visitors reach the challenge page", async () => {
+  const proxy = createNoSkrapProxy({
+    secret: SECRET,
+    mode: "enforce",
+    challengePath: "/bot-check",
+    storage: new MemoryBotStorage(),
+    thresholds: { observe: 10, challenge: 20, block: 95 },
+  });
+
+  const response = await proxy(
+    new Request("https://example.test/bot-check", {
+      headers: { "user-agent": "HeadlessChrome/120" },
+    }),
+  );
+
+  expect(response?.status).toBe(200);
+  expect(response?.headers.get("location")).toBeNull();
+  expect(response?.headers.get("set-cookie")).toContain("noskrap_visitor=");
+});
+
+test("proxy still blocks on the challenge page", async () => {
+  const proxy = createNoSkrapProxy({
+    secret: SECRET,
+    mode: "enforce",
+    challengePath: "/bot-check",
+    storage: new MemoryBotStorage(),
+    thresholds: { observe: 10, challenge: 20, block: 25 },
+  });
+
+  const response = await proxy(
+    new Request("https://example.test/bot-check", {
+      headers: { "user-agent": "HeadlessChrome/120" },
     }),
   );
 
