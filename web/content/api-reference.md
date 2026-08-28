@@ -63,9 +63,21 @@ and the two rules that read stored state degrade without failing:
   A visitor who interacted on one instance looks inactive on the next.
 
 Neither rule reports an error when this happens; the scores simply come out
-lower than they should. In production, pass a `BotStorage` backed by shared,
-persistent infrastructure such as Redis, a database, or your platform's KV
-store.
+lower than they should.
+
+The fallback is also bounded. `MemoryBotStorage` holds 10,000 visitors by
+default and evicts the oldest entry once it is full, so a client that sends
+enough cookie-less requests can push real visitors out of the store. Those
+visitors keep their signed cookie, so they are not treated as new, but their
+recorded interaction is gone and `behavior.noRecentInteraction` starts firing
+on their next protected state-changing request. In a run against a store capped
+at five entries, a visitor's score on a protected `POST` went from 20 to 50
+after a flood of cookie-less requests. That is a false positive against a real
+user, which is the failure mode this package exists to avoid.
+
+Any bounded cache can be flooded; the fix is not a bigger cap. In production,
+pass a `BotStorage` backed by shared, persistent infrastructure such as Redis,
+a database, or your platform's KV store, and let that layer handle capacity.
 
 ## Config
 
