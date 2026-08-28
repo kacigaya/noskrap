@@ -113,10 +113,17 @@ export function createNoSkrapProxy(config: NoSkrapProxyConfig) {
       });
     }
 
+    // The challenge page usually sits inside the proxy matcher, so redirecting
+    // a challenged visitor who is already on it would loop forever and they
+    // could never solve the challenge.
     if (
       config.mode === "enforce" &&
       decision.decision === "challenge" &&
-      config.challengePath
+      config.challengePath &&
+      !samePath(
+        new URL(request.url).pathname,
+        new URL(config.challengePath, request.url).pathname,
+      )
     ) {
       const redirectUrl = new URL(config.challengePath, request.url);
       redirectUrl.searchParams.set("next", new URL(request.url).pathname);
@@ -210,6 +217,16 @@ export function createNoSkrapChallengePassHandler(
       },
     );
   };
+}
+
+// Next.js serves a route with or without a trailing slash depending on
+// `trailingSlash`, so both spellings have to compare equal.
+function samePath(a: string, b: string): boolean {
+  return stripTrailingSlash(a) === stripTrailingSlash(b);
+}
+
+function stripTrailingSlash(path: string): string {
+  return path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
 }
 
 function copySetCookie(from: Headers, to: Headers): void {
