@@ -139,6 +139,101 @@ test("proxy enforces block decisions", async () => {
   );
 
   expect(response?.status).toBe(403);
+  expect(response?.headers.get("set-cookie")).toContain("noskrap_visitor=");
+});
+
+test("proxy does not block in observe mode", async () => {
+  const proxy = createNoSkrapProxy({
+    secret: SECRET,
+    protectedRoutes: ["/api/search"],
+  });
+
+  const response = await proxy(
+    new Request("https://example.test/api/search", {
+      method: "POST",
+      headers: { "user-agent": "curl/8.0" },
+    }),
+  );
+
+  expect(response?.status).toBe(200);
+});
+
+test("proxy redirects challenged visitors and keeps the cookie", async () => {
+  const proxy = createNoSkrapProxy({
+    secret: SECRET,
+    mode: "enforce",
+    challengePath: "/bot-check",
+    storage: new MemoryBotStorage(),
+    thresholds: { observe: 10, challenge: 20, block: 95 },
+  });
+
+  const response = await proxy(
+    new Request("https://example.test/api/search", {
+      headers: { "user-agent": "HeadlessChrome/120" },
+    }),
+  );
+
+  // The mocked NextResponse.redirect answers 302; Next.js itself sends 307.
+  expect(response?.status).toBeGreaterThanOrEqual(300);
+  expect(response?.status).toBeLessThan(400);
+  expect(new URL(response!.headers.get("location")!).pathname).toBe(
+    "/bot-check",
+  );
+  expect(response?.headers.get("set-cookie")).toContain("noskrap_visitor=");
+});
+
+test("proxy lets challenge decisions through without a challenge path", async () => {
+  const observations: { decision: string }[] = [];
+  const proxy = createNoSkrapProxy({
+    secret: SECRET,
+    mode: "enforce",
+    storage: new MemoryBotStorage(),
+    thresholds: { observe: 10, challenge: 20, block: 95 },
+    onDecision: (result) => observations.push(result),
+  });
+
+  const response = await proxy(
+    new Request("https://example.test/api/search", {
+      headers: { "user-agent": "HeadlessChrome/120" },
+    }),
+  );
+
+  expect(observations[0]?.decision).toBe("challenge");
+  expect(response?.status).toBe(200);
+  expect(response?.headers.get("location")).toBeNull();
+});
+
+test("proxy replaces an invalid visitor cookie", async () => {
+  const proxy = createNoSkrapProxy({
+    secret: SECRET,
+    storage: new MemoryBotStorage(),
+  });
+
+  const response = await proxy(
+    new Request("https://example.test/", {
+      headers: { cookie: "noskrap_visitor=invalid" },
+    }),
+  );
+
+  const cookie = response?.headers.get("set-cookie") ?? "";
+  expect(cookie).toContain("noskrap_visitor=");
+  expect(cookie).not.toContain("noskrap_visitor=invalid");
+});
+
+test("proxy keeps a valid visitor cookie stable", async () => {
+  const proxy = createNoSkrapProxy({
+    secret: SECRET,
+    storage: new MemoryBotStorage(),
+  });
+
+  const first = await proxy(new Request("https://example.test/"));
+  const cookie = first?.headers.get("set-cookie")?.split(";")[0] ?? "";
+  const second = await proxy(
+    new Request("https://example.test/", { headers: { cookie } }),
+  );
+
+  expect(cookie).toContain("noskrap_visitor=");
+  expect(second?.headers.get("set-cookie")?.split(";")[0]).toBe(cookie);
 });
 
 test("proxy lets challenged visitors reach the challenge page", async () => {
