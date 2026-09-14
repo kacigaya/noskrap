@@ -1,28 +1,23 @@
 # Development
 
-Clone the repo and install dependencies:
+Clone the repo and install dependencies for the package and the docs site:
 
 ```bash
 git clone https://github.com/kacigaya/noskrap.git
 cd noskrap
 bun install
+bun install --cwd web
 ```
 
-Run the package checks:
+Run the checks:
 
 ```bash
 bun run check
 ```
 
-That builds with TypeScript and runs the Bun test suite.
-
-CI runs more than that, so run the rest before opening a pull request:
-
-```bash
-bun pm pack --dry-run      # what the published tarball would contain
-cd web && bun run lint     # docs site lint
-cd web && bun run build    # docs site static export
-```
+That is the same gate CI runs: TypeScript build, Bun test suite, a dry-run
+pack to confirm the published tarball contents, then lint and static export of
+the docs site. `bun run check:web` runs only the docs site part.
 
 ## Test app
 

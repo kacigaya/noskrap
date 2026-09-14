@@ -28,7 +28,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "bun test",
-    "check": "bun run build && bun test",
+    "check": "bun run build && bun test && bun pm pack --dry-run && bun run check:web",
+    "check:web": "bun run --cwd web lint && bun run --cwd web build",
     "prepack": "bun run build"
   },
   "peerDependencies": {
