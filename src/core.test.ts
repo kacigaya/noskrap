@@ -54,6 +54,33 @@ describe("memory storage", () => {
     expect(await storage.getVisitor("b")).not.toBeNull();
     expect(await storage.getVisitor("c")).not.toBeNull();
   });
+
+  test("expires visitors by ttl", async () => {
+    let now = 0;
+    const storage = new MemoryBotStorage(() => now);
+    await storage.setVisitor("a", { id: "a", lastSeen: 0 }, 60);
+
+    now = 60_000;
+    expect(await storage.getVisitor("a")).toBeNull();
+  });
+
+  test("evicts expired entries before live ones when full", async () => {
+    let now = 0;
+    const storage = new MemoryBotStorage(() => now, 2);
+    await storage.setVisitor("stale", { id: "stale", lastSeen: 0 }, 1);
+    await storage.setVisitor("live", { id: "live", lastSeen: 0 }, 60);
+
+    now = 1_000;
+    await storage.setVisitor("new", { id: "new", lastSeen: now }, 60);
+
+    expect(await storage.getVisitor("stale")).toBeNull();
+    expect(await storage.getVisitor("live")).not.toBeNull();
+    expect(await storage.getVisitor("new")).not.toBeNull();
+  });
+
+  test("rejects an invalid capacity", () => {
+    expect(() => new MemoryBotStorage(Date.now, 0)).toThrow(TypeError);
+  });
 });
 
 describe("scoring", () => {
@@ -181,6 +208,23 @@ describe("scoring", () => {
     }
 
     expect(result?.reasons.map((reason) => reason.ruleId)).toContain(
+      "rate.routeBurst",
+    );
+  });
+
+  test("keeps rate buckets separate per client IP", async () => {
+    const storage = new MemoryBotStorage(() => 1000);
+    let result;
+
+    for (let index = 0; index < 80; index += 1) {
+      result = await scoreRequest(new Request("https://example.test/search"), {
+        secret: SECRET,
+        storage,
+        getClientIp: () => (index % 2 ? "203.0.113.1" : "203.0.113.2"),
+      });
+    }
+
+    expect(result?.reasons.map((reason) => reason.ruleId)).not.toContain(
       "rate.routeBurst",
     );
   });

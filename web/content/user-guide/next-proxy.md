@@ -35,8 +35,12 @@ the client.
 In enforce mode:
 
 - `block` returns `403`.
-- `challenge` redirects to `challengePath` when configured.
+- `challenge` redirects to `challengePath` when configured. Without one, the
+  request continues like `observe`; the decision still reaches `onDecision`.
 - `allow` and `observe` continue.
+
+Every response, including the `403` and the redirect, carries the signed
+visitor cookie so continuity survives enforcement.
 
 ```ts
 createNoSkrapProxy({
