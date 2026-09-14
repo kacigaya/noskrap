@@ -1,6 +1,6 @@
 # API Reference
 
-NoSkrap exports three entrypoints.
+NoSkrap exports four entrypoints.
 
 ## `noskrap/next`
 
@@ -23,6 +23,12 @@ NoSkrap exports three entrypoints.
 | `MemoryBotStorage` | Process-local storage for development and tests. Used implicitly when `storage` is omitted. |
 | `signVisitorToken(payload, secret)` | Signs a visitor token. |
 | `verifyVisitorToken(token, secrets)` | Verifies a visitor token with one or more secrets. |
+
+## `noskrap/redis`
+
+| API | Description |
+| --- | --- |
+| `RedisBotStorage(client, options?)` | Shared storage backed by a Redis client. See Storage below. |
 
 ## `noskrap/client`
 
@@ -78,6 +84,34 @@ user, which is the failure mode this package exists to avoid.
 Any bounded cache can be flooded; the fix is not a bigger cap. In production,
 pass a `BotStorage` backed by shared, persistent infrastructure such as Redis,
 a database, or your platform's KV store, and let that layer handle capacity.
+
+### Redis
+
+`RedisBotStorage` wraps a Redis client you already have. It needs only `get`,
+`set`, `incr`, and `expire`, which ioredis, node-redis, and `@upstash/redis`
+all expose with the same shape, so any of them can be passed in directly.
+
+```ts
+import { Redis } from "ioredis";
+import { createNoSkrapProxy } from "noskrap/next";
+import { RedisBotStorage } from "noskrap/redis";
+
+export const proxy = createNoSkrapProxy({
+  secret: process.env.NOSKRAP_SECRET!,
+  storage: new RedisBotStorage(new Redis(process.env.REDIS_URL!)),
+});
+```
+
+Keys are namespaced under `noskrap:` by default; pass `{ keyPrefix }` to
+change that when the database is shared. Visitor state is stored as JSON with
+the TTL the scorer asks for. Route counters live in clock-aligned windows and
+expire with them, so a burst that straddles a boundary can briefly count
+against two windows. Redis owns capacity, so the eviction concern above does
+not apply.
+
+`proxy.ts` runs on the Node.js runtime in Next.js 16, so TCP clients work as
+shown. The older `middleware.ts` in Next.js 15 runs on the Edge runtime, which
+cannot open sockets; use an HTTP client such as `@upstash/redis` there.
 
 ## Config
 
