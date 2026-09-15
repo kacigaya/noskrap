@@ -5,7 +5,7 @@ import { LEGAL_UPDATED } from "../updated";
 export const metadata: Metadata = {
   title: "Cookies policy",
   description: "How NoSkrap handles cookies, browser storage, and preferences.",
-  alternates: { canonical: null },
+  alternates: { canonical: "https://kacigaya.github.io/noskrap/cookies/" },
   openGraph: {
     title: "Cookies policy | NoSkrap",
     description:

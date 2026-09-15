@@ -5,7 +5,7 @@ import { LEGAL_UPDATED } from "../updated";
 export const metadata: Metadata = {
   title: "Privacy policy",
   description: "How NoSkrap handles data, hosting requests, and your privacy.",
-  alternates: { canonical: null },
+  alternates: { canonical: "https://kacigaya.github.io/noskrap/privacy/" },
   openGraph: {
     title: "Privacy policy | NoSkrap",
     description:
