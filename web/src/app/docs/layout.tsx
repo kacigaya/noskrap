@@ -1,3 +1,4 @@
+import { SiteFooter } from "@/components/site-footer";
 import Image from "next/image";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -17,12 +18,21 @@ export default function DocsLayout({
       <header className="sticky top-0 z-20 px-4 pt-4">
         <div className="mx-auto flex w-full max-w-6xl items-center justify-between rounded-2xl border bg-background/70 px-5 py-3 shadow-sm backdrop-blur-md">
           <Link href="/" className="flex items-center gap-2.5">
-            <Image src={asset("/noskrap-logo.svg")} alt="NoSkrap" width={28} height={28} />
+            <Image
+              src={asset("/noskrap-logo.svg")}
+              alt="NoSkrap"
+              width={28}
+              height={28}
+            />
             <span className="font-semibold tracking-tight">NoSkrap</span>
           </Link>
           <nav aria-label="Main" className="flex items-center gap-2">
             <ThemeToggle />
-            <Button variant="outline" size="sm" render={<a href={GITHUB_URL} />}>
+            <Button
+              variant="outline"
+              size="sm"
+              render={<a href={GITHUB_URL} />}
+            >
               GitHub
             </Button>
           </nav>
@@ -37,7 +47,9 @@ export default function DocsLayout({
         </aside>
         <main id="main-content" className="min-w-0 flex-1 py-6 md:py-10">
           <details className="mb-8 rounded-xl border p-4 md:hidden">
-            <summary className="cursor-pointer font-medium">Documentation</summary>
+            <summary className="cursor-pointer font-medium">
+              Documentation
+            </summary>
             <div className="mt-4">
               <DocsSidebar />
             </div>
@@ -45,6 +57,7 @@ export default function DocsLayout({
           {children}
         </main>
       </div>
+      <SiteFooter />
     </div>
   );
 }
