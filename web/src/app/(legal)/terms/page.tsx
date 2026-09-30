@@ -1,17 +1,20 @@
 import type { Metadata } from "next";
+import { SITE_URL, SOCIAL_IMAGE } from "@/lib/site";
 import Link from "next/link";
 
 export const metadata: Metadata = {
   title: "Terms of use",
   description: "Terms for the NoSkrap website, documentation, and software.",
-  alternates: { canonical: "https://kacigaya.github.io/noskrap/terms/" },
+  alternates: { canonical: `${SITE_URL}/terms/` },
   openGraph: {
+    images: [SOCIAL_IMAGE],
     title: "Terms of use | NoSkrap",
     description: "Terms for the NoSkrap website, documentation, and software.",
     type: "website",
-    url: "https://kacigaya.github.io/noskrap/terms/",
+    url: `${SITE_URL}/terms/`,
   },
   twitter: {
+    images: [SOCIAL_IMAGE.url],
     card: "summary",
     title: "Terms of use | NoSkrap",
     description: "Terms for the NoSkrap website, documentation, and software.",

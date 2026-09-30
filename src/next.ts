@@ -1,17 +1,23 @@
 import {
   type BotResult,
   type NoSkrapConfig,
+  type TelemetryResult,
+  BotStorageError,
   createChallengePassHeaders,
   recordTelemetry,
   scoreRequest,
+  validateConfig,
 } from "./core.js";
+import { CONTEXT_HEADER, readContext, signContext } from "./context.js";
 
 export type NoSkrapObservation = Pick<
   BotResult,
-  "decision" | "score" | "reasons" | "challengePassed"
+  "decision" | "score" | "reasons" | "challengePassed" | "scoringAvailable"
 >;
 
 export interface NoSkrapProxyConfig extends NoSkrapConfig {
+  // Exact paths only. Keep verification and abuse limits in these handlers.
+  recoveryRoutes?: string[];
   onDecision?: (
     result: NoSkrapObservation,
     request: Request,
@@ -22,6 +28,7 @@ export interface NoSkrapTelemetryConfig extends NoSkrapConfig {
   verifyTelemetry: (
     request: Request,
     payload: { interacted: boolean },
+    rawBody: Uint8Array,
   ) => boolean | Promise<boolean>;
 }
 
@@ -45,8 +52,8 @@ function isTelemetryPayload(value: unknown): value is { interacted: boolean } {
 async function readBodyWithLimit(
   request: Request,
   limit: number,
-): Promise<string | null> {
-  if (!request.body) return "";
+): Promise<Uint8Array | null> {
+  if (!request.body) return new Uint8Array();
 
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -73,30 +80,46 @@ async function readBodyWithLimit(
     buffer.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return new TextDecoder().decode(buffer);
+  return buffer;
 }
 
 export async function getNoSkrapDecision(
   request: Request,
   config: NoSkrapConfig,
 ): Promise<BotResult> {
-  return scoreRequest(request, config);
+  validateConfig(config);
+  return (await readContext(request, config)) ?? scoreRequest(request, config);
 }
 
 export function createNoSkrapProxy(config: NoSkrapProxyConfig) {
+  validateConfig(config);
+  if (config.recoveryRoutes?.some(path =>
+    typeof path !== "string" || !path.startsWith("/") ||
+    path.startsWith("//") || /[?#\\]/.test(path)
+  )) {
+    throw new TypeError("recoveryRoutes must contain absolute URL paths");
+  }
   return async function noSkrapProxy(
     request: Request,
-  ): Promise<Response | undefined> {
+  ): Promise<Response> {
+    const { NextResponse } = await import("next/server");
+    const pathname = new URL(request.url).pathname;
+    if (config.recoveryRoutes?.some(path => samePath(pathname, path))) {
+      const headers = new Headers(request.headers);
+      headers.delete(CONTEXT_HEADER);
+      return NextResponse.next({ request: { headers } });
+    }
     const decision = await scoreRequest(request, config);
     if (config.onDecision) {
       try {
-        const { score, reasons, challengePassed } = decision;
+        const { score, reasons, challengePassed, scoringAvailable } = decision;
         await config.onDecision(
           {
             decision: decision.decision,
             score,
             reasons,
             challengePassed,
+            scoringAvailable,
           },
           request,
         );
@@ -104,7 +127,13 @@ export function createNoSkrapProxy(config: NoSkrapProxyConfig) {
         console.error("NoSkrap onDecision failed", error);
       }
     }
-    const { NextResponse } = await import("next/server");
+    const failureMode = config.storageFailureMode ??
+      (config.mode === "enforce" ? "closed" : "open");
+    if (!decision.scoringAvailable && failureMode === "closed") {
+      return Response.json({ error: "scoring unavailable" }, {
+        status: 503, headers: decision.headers,
+      });
+    }
 
     if (config.mode === "enforce" && decision.decision === "block") {
       return new Response("Forbidden", {
@@ -127,25 +156,42 @@ export function createNoSkrapProxy(config: NoSkrapProxyConfig) {
     ) {
       const redirectUrl = new URL(config.challengePath, request.url);
       redirectUrl.searchParams.set("next", safeReturnTarget(request.url));
-      const response = NextResponse.redirect(redirectUrl);
+      if (!isNavigation(request)) {
+        return Response.json({
+          error: "challenge required", challengeUrl: redirectUrl.href,
+        }, { status: 403, headers: decision.headers });
+      }
+      const response = NextResponse.redirect(redirectUrl, {
+        status: request.method === "GET" || request.method === "HEAD" ? 307 : 303,
+      });
       copySetCookie(decision.headers, response.headers);
       return response;
     }
 
-    const response = NextResponse.next();
+    const headers = new Headers(request.headers);
+    headers.set(CONTEXT_HEADER, await signContext(request, decision, config));
+    const visitorCookie = decision.headers.get("set-cookie")!.split(";")[0];
+    const otherCookies = (headers.get("cookie") ?? "").split(";").filter(part =>
+      !part.trim().startsWith("noskrap_visitor=") && part.trim()
+    );
+    headers.set("cookie", [...otherCookies, visitorCookie].join("; "));
+    const response = NextResponse.next({ request: { headers } });
     copySetCookie(decision.headers, response.headers);
     return response;
   };
 }
 
 export function createNoSkrapTelemetryHandler(config: NoSkrapTelemetryConfig) {
+  validateConfig(config);
   if (typeof config.verifyTelemetry !== "function") {
     throw new TypeError("verifyTelemetry must be a function");
   }
 
   return async function noSkrapTelemetry(request: Request): Promise<Response> {
     if (request.method !== "POST") {
-      return new Response("Method Not Allowed", { status: 405 });
+      return new Response("Method Not Allowed", {
+        status: 405, headers: { allow: "POST" },
+      });
     }
 
     // Fast path for clients that honestly declare an oversized body.
@@ -161,7 +207,7 @@ export function createNoSkrapTelemetryHandler(config: NoSkrapTelemetryConfig) {
 
     let parsed: unknown;
     try {
-      parsed = JSON.parse(raw);
+      parsed = JSON.parse(new TextDecoder().decode(raw));
     } catch {
       return Response.json({ error: "invalid payload" }, { status: 400 });
     }
@@ -170,11 +216,17 @@ export function createNoSkrapTelemetryHandler(config: NoSkrapTelemetryConfig) {
     }
 
     const payload = { interacted: parsed.interacted };
-    if (!(await config.verifyTelemetry(request, payload))) {
+    if (!(await config.verifyTelemetry(request, payload, raw))) {
       return Response.json({ error: "unauthorized" }, { status: 401 });
     }
 
-    const result = await recordTelemetry(request, config, payload);
+    let result: TelemetryResult;
+    try {
+      result = await recordTelemetry(request, config, payload);
+    } catch (error) {
+      if (!(error instanceof BotStorageError)) throw error;
+      return Response.json({ error: "telemetry unavailable" }, { status: 503 });
+    }
 
     return Response.json(
       { ok: true },
@@ -188,6 +240,7 @@ export function createNoSkrapTelemetryHandler(config: NoSkrapTelemetryConfig) {
 export function createNoSkrapChallengePassHandler(
   config: NoSkrapChallengePassConfig,
 ) {
+  validateConfig(config);
   if (typeof config.verifyChallenge !== "function") {
     throw new TypeError("verifyChallenge must be a function");
   }
@@ -195,10 +248,12 @@ export function createNoSkrapChallengePassHandler(
   return async function noSkrapChallengePass(
     request: Request,
   ): Promise<Response> {
-    if (
-      request.method !== "POST" ||
-      !(await config.verifyChallenge(request))
-    ) {
+    if (request.method !== "POST") {
+      return new Response("Method Not Allowed", {
+        status: 405, headers: { allow: "POST" },
+      });
+    }
+    if (!(await config.verifyChallenge(request))) {
       return Response.json({ error: "unauthorized" }, { status: 401 });
     }
 
@@ -226,7 +281,16 @@ function samePath(a: string, b: string): boolean {
 }
 
 function stripTrailingSlash(path: string): string {
-  return path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
+  return path.replace(/\/+$/, "") || "/";
+}
+
+function isNavigation(request: Request): boolean {
+  const mode = request.headers.get("sec-fetch-mode");
+  if (mode) return mode === "navigate";
+  const accept = request.headers.get("accept") ?? "";
+  return accept.includes("text/html") ||
+    ((request.method === "GET" || request.method === "HEAD") &&
+      !accept.includes("application/json"));
 }
 
 // The challenge page gets this back as `next` and will redirect to it, so it

@@ -19,6 +19,26 @@ export const proxy = createNoSkrapProxy({
 });
 ```
 
+The example uses Next.js 16's `proxy.ts`. For Next.js 15, create
+`middleware.ts` instead and export `middleware`:
+
+```ts
+import { createNoSkrapProxy } from "noskrap/next";
+
+export const middleware = createNoSkrapProxy({
+  secret: process.env.NOSKRAP_SECRET!,
+  protectedRoutes: ["/api/search", "/login", "/checkout"],
+});
+export const config = {
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml).*)"],
+};
+```
+
+Use a shared production storage implementation in every entrypoint. The memory
+fallback is for tests and development; Next.js proxy and route bundles can
+have separate stores even on a single server. See the API reference for Redis
+configuration and Edge-compatible adapters.
+
 The proxy runs in observe mode unless `mode: "enforce"` is set. In observe mode it sets visitor continuity cookies and returns `NextResponse.next()`.
 
 ## Inspect a decision in a route handler
@@ -38,7 +58,7 @@ export async function POST(request: Request) {
     decision: result.decision,
     score: result.score,
     reasons: result.reasons,
-  });
+  }, { headers: result.headers });
 }
 ```
 
@@ -73,5 +93,9 @@ export const proxy = createNoSkrapProxy({
   mode: "enforce",
   protectedRoutes: ["/api/search", "/login", "/checkout"],
   challengePath: "/bot-check",
+  recoveryRoutes: ["/api/noskrap/telemetry", "/api/noskrap/challenge-pass"],
 });
 ```
+
+This inspection example exposes scores for development and does not enforce
+a decision locally. See Route Handlers for rejection and outage handling.

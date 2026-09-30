@@ -12,14 +12,14 @@ NoSkrap ships ESM exports:
 | --- | --- |
 | `noskrap/next` | Next.js proxy and route handler helpers. |
 | `noskrap/core` | Framework-independent scoring and storage types. |
-| `noskrap/redis` | Shared `BotStorage` backed by any Redis client. |
+| `noskrap/redis` | Atomic shared storage with Redis client adapters. |
 | `noskrap/client` | Browser popup helper. |
 
 ## Requirements
 
 - Next.js 15 or newer for `noskrap/next`.
 - A secret of at least 32 characters in `NOSKRAP_SECRET`.
-- A shared `BotStorage` for any deployment that runs more than one instance.
+- A shared `BotStorage` for production, including a single Next.js server.
   `noskrap/redis` provides one; see the API reference.
 
 ## Environment

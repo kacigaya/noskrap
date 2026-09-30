@@ -6,112 +6,96 @@ NoSkrap exports four entrypoints.
 
 | API | Description |
 | --- | --- |
-| `createNoSkrapProxy(config)` | Creates a Next.js proxy function. |
-| `getNoSkrapDecision(request, config)` | Returns the core scoring result. |
-| `createNoSkrapTelemetryHandler(config)` | Creates a telemetry handler requiring `verifyTelemetry`. |
-| `createNoSkrapChallengePassHandler(config)` | Creates a pass handler requiring `verifyChallenge`. |
+| `createNoSkrapProxy(config)` | Creates a Next.js proxy or middleware function. |
+| `getNoSkrapDecision(request, config)` | Reuses verified proxy context, otherwise scores directly. |
+| `createNoSkrapTelemetryHandler(config)` | Requires `verifyTelemetry(request, payload, rawBody)`. |
+| `createNoSkrapChallengePassHandler(config)` | Requires `verifyChallenge(request)`. Accepts POST only. |
 
 ## `noskrap/core`
 
 | API | Description |
 | --- | --- |
-| `scoreRequest(request, config)` | Scores a request and returns a `BotResult`. |
-| `recordTelemetry(request, config, payload)` | Scores and records coarse interaction state. |
-| `createChallengePassHeaders(request, config)` | Creates a challenge pass cookie for an existing signed visitor. |
-| `verifyChallengePass(request, config)` | Checks a signed challenge pass cookie. |
-| `decisionForScore(score, thresholds?)` | Maps a numeric score to a decision. |
-| `MemoryBotStorage` | Process-local storage for development and tests. Used implicitly when `storage` is omitted. |
-| `signVisitorToken(payload, secret)` | Signs a visitor token. |
-| `verifyVisitorToken(token, secrets)` | Verifies a visitor token with one or more secrets. |
+| `scoreRequest(request, config)` | Returns a `BotResult`; never writes visitor interaction state. |
+| `recordTelemetry(request, config, payload)` | Records verified interaction and returns `{ visitorId, headers }`; does not score. |
+| `BotStorageError` | Persistence failure or timeout thrown by `recordTelemetry`. |
+| `createChallengePassHeaders(request, config)` | Issues a challenge cookie for an existing signed visitor. |
+| `verifyChallengePass(request, config)` | Checks a visitor-bound, expiring challenge cookie. |
+| `decisionForScore(score, thresholds?)` | Maps a score to a decision. |
+| `MemoryBotStorage` | Bounded development/test storage; default when storage is omitted. |
+| `signVisitorToken(payload, secret)` | Signs a visitor token, including Unicode IDs. |
+| `verifyVisitorToken(token, secrets)` | Verifies a token with one or more secrets. |
 
 ## `noskrap/redis`
 
 | API | Description |
 | --- | --- |
-| `RedisBotStorage(client, options?)` | Shared storage backed by a Redis client. See Storage below. |
+| `RedisBotStorage(client, options?)` | Shared Redis storage using atomic Lua scripts. |
+| `adaptNodeRedis(client)` | Adapts node-redis's `eval(script, { keys, arguments })`. |
+| `adaptUpstashRedis(client)` | Adapts Upstash's `eval(script, keys, args)`. |
 
 ## `noskrap/client`
 
-| API | Description |
-| --- | --- |
-| `showBotDetectedPopup(result, options?)` | Shows a popup for configured decisions. |
-
-## Core example
-
-```ts
-import { MemoryBotStorage, scoreRequest } from "noskrap/core";
-
-const result = await scoreRequest(request, {
-  secret: process.env.NOSKRAP_SECRET!,
-  // Process-local. See Storage below before using this in production.
-  storage: new MemoryBotStorage(),
-  protectedRoutes: ["/api/search"],
-});
-
-console.log(result.decision, result.score, result.reasons);
-```
+`showBotDetectedPopup(result, options?)` shows a popup for configured decisions.
 
 ## Storage
 
-`scoreRequest` and `recordTelemetry` keep visitor state and route counters in
-the `BotStorage` you pass as `storage`. Omit it and both fall back to one shared
-`MemoryBotStorage` instance, logging a warning the first time they do.
+Use the same shared `BotStorage` and key prefix in the proxy, route handlers and
+telemetry. Next.js can bundle them into separate runtimes even on one server;
+a module singleton or `MemoryBotStorage` does not share state across those
+bundles. Production needs shared Redis, database or platform KV storage.
 
-That fallback holds everything in the current process. It suits local
-development, tests, and a single long-lived instance. On serverless, edge, or
-any horizontally scaled deployment, each instance starts with an empty store,
-and the two rules that read stored state degrade without failing:
+The memory fallback warns once per runtime. It caps visitor and counter maps at
+10,000 entries each by default, checks expiry on reads, and sweeps expired
+entries at most once per second when full. Between sweeps, capacity pressure
+can evict the oldest inserted live record. Losing interaction state can cause
+false positives; losing counters weakens rate limits.
 
-- `rate.routeBurst` counts requests per IP and per visitor inside a 60 second
-  window. Split across instances, each counter sees a fraction of the traffic,
-  so the effective limit rises with the instance count.
-- `behavior.noRecentInteraction` reads the last verified interaction timestamp.
-  A visitor who interacted on one instance looks inactive on the next.
+Only verified `interacted: true` telemetry creates an interaction record, with
+a 10-minute TTL. False telemetry does not erase or refresh it. Scoring no longer
+creates 30-day visitor records. Signed visitor cookies still last 30 days;
+a cookie-less request gets an IP counter only when a trusted IP resolver is
+configured, and no visitor counter until it returns a valid cookie.
 
-Neither rule reports an error when this happens; the scores simply come out
-lower than they should.
-
-The fallback is also bounded. `MemoryBotStorage` holds 10,000 visitors by
-default and evicts the oldest entry once it is full, so a client that sends
-enough cookie-less requests can push real visitors out of the store. Those
-visitors keep their signed cookie, so they are not treated as new, but their
-recorded interaction is gone and `behavior.noRecentInteraction` starts firing
-on their next protected state-changing request. In a run against a store capped
-at five entries, a visitor's score on a protected `POST` went from 20 to 50
-after a flood of cookie-less requests. That is a false positive against a real
-user, which is the failure mode this package exists to avoid.
-
-Any bounded cache can be flooded; the fix is not a bigger cap. In production,
-pass a `BotStorage` backed by shared, persistent infrastructure such as Redis,
-a database, or your platform's KV store, and let that layer handle capacity.
+Custom storage must atomically merge `setVisitor` timestamps using the maximum
+of existing and supplied `lastSeen` and `lastInteractionAt`. A read followed by
+a write is unsafe under concurrent telemetry. `incrementCounter` must atomically
+increment and ensure expiry. Missing visitor records return `null`; outages
+must reject rather than silently return an empty record or zero counter.
 
 ### Redis
 
-`RedisBotStorage` wraps a Redis client you already have. It needs only `get`,
-`set`, `incr`, and `expire`, which ioredis, node-redis, and `@upstash/redis`
-all expose with the same shape, so any of them can be passed in directly.
+Redis clients need `get` and `eval`, plus Redis permissions for `GET`, `SET`,
+`INCR`, `TTL` and `EXPIRE` inside Lua scripts. ioredis works directly:
 
 ```ts
+// lib/noskrap.ts; reuse this config in every integration entrypoint.
 import { Redis } from "ioredis";
-import { createNoSkrapProxy } from "noskrap/next";
 import { RedisBotStorage } from "noskrap/redis";
 
-export const proxy = createNoSkrapProxy({
+export const noSkrapConfig = {
   secret: process.env.NOSKRAP_SECRET!,
+  protectedRoutes: ["/api/search", "/login", "/checkout"],
   storage: new RedisBotStorage(new Redis(process.env.REDIS_URL!)),
-});
+};
 ```
 
-Keys are namespaced under `noskrap:` by default; pass `{ keyPrefix }` to
-change that when the database is shared. Visitor state is stored as JSON with
-the TTL the scorer asks for. Route counters live in clock-aligned windows and
-expire with them, so a burst that straddles a boundary can briefly count
-against two windows. Redis owns capacity, so the eviction concern above does
-not apply.
+Use your installed client; NoSkrap adds no Redis dependency. For other clients:
 
-`proxy.ts` runs on the Node.js runtime in Next.js 16, so TCP clients work as
-shown. The older `middleware.ts` in Next.js 15 runs on the Edge runtime, which
-cannot open sockets; use an HTTP client such as `@upstash/redis` there.
+```ts
+import { RedisBotStorage, adaptNodeRedis, adaptUpstashRedis } from "noskrap/redis";
+
+const nodeStorage = new RedisBotStorage(adaptNodeRedis(nodeRedisClient));
+const edgeStorage = new RedisBotStorage(adaptUpstashRedis(upstashClient));
+```
+
+Next.js 16 `proxy.ts` runs in Node.js and supports TCP clients. Next.js 15
+`middleware.ts` defaults to [Edge](https://nextjs.org/docs/15/app/api-reference/file-conventions/middleware#runtime); use an HTTP client such as Upstash there.
+Use the same shared service and prefix for Node.js route handlers.
+
+Keys default to `noskrap:`; customize with `{ keyPrefix }`. Counter buckets are
+clock-aligned 60-second windows. A boundary resets the count, so a burst can
+span two windows. Keep instance clocks synchronized. Each write and expiry is
+atomic; legacy counter keys without TTL are repaired on the next increment.
 
 ## Config
 
@@ -122,23 +106,33 @@ interface NoSkrapConfig {
   protectedRoutes?: string[];
   challengePath?: string;
   challengeTtlSeconds?: number;
+  storageTimeoutMs?: number;
+  storageFailureMode?: "open" | "closed";
   getClientIp?: (request: Request) => string | null | undefined;
   storage?: BotStorage;
-  thresholds?: {
-    observe: number;
-    challenge: number;
-    block: number;
-  };
+  thresholds?: { observe: number; challenge: number; block: number };
   rules?: RuleConfig[];
   now?: () => number;
 }
 ```
 
-Secrets must contain at least 32 characters. `createNoSkrapProxy` also accepts
-an `onDecision(result, request)` callback for observation. Its result excludes
-visitor IDs and cookie headers.
+Secrets need at least 32 characters. Proxy configuration also accepts exact
+`recoveryRoutes` and `onDecision(result, request)`. The observation omits visitor
+IDs and cookies and includes `scoringAvailable`.
 
-## Result
+Storage calls run concurrently and have a 1,000 ms total deadline by default.
+Failure leaves header-derived rules intact and marks `scoringAvailable: false`;
+it does not fabricate storage-dependent reasons. The proxy defaults to opening
+in observe mode and returning 503 in enforce mode. Set `storageFailureMode`
+explicitly to override. `scoreRequest` reports availability without enforcing
+that policy; direct callers must handle it. Telemetry persistence failures
+return 503 from the supplied handler or throw `BotStorageError` from the core.
+
+The deadline cannot cancel an arbitrary storage client's pending I/O. Configure
+client connection and command timeouts too, to bound resource usage. A timed-out
+operation may still finish and increment a counter or save telemetry.
+
+## Results
 
 ```ts
 interface BotResult {
@@ -147,40 +141,45 @@ interface BotResult {
   reasons: BotReason[];
   visitorId: string;
   challengePassed: boolean;
+  scoringAvailable: boolean;
+  headers: Headers;
+}
+interface TelemetryResult {
+  visitorId: string;
   headers: Headers;
 }
 ```
 
 ## Scoring
 
-Default score bands:
+Default bands are 0–29 allow, 30–59 observe, 60–84 challenge and 85–100 block.
+Signals cover missing HTML browser headers, automation user agents, Client
+Hints mismatch, weak fetch metadata, missing signed cookie continuity, protected
+writes without recent interaction, and bursts per visitor or trusted IP.
 
-| Score | Decision |
-| ---: | --- |
-| 0-29 | `allow` |
-| 30-59 | `observe` |
-| 60-84 | `challenge` |
-| 85+ | `block` |
+Children share the longest matching protected-route bucket; unprotected paths
+share `*`. `/` matches every path. Trailing slashes are ignored, while sibling
+prefixes stay separate. This closes dynamic-path limit fragmentation and can
+increase scores for traffic previously spread across child paths.
 
-Built-in signals cover:
-
-- missing browser headers on HTML navigation
-- automation user-agent tokens
-- user-agent and Client Hints platform mismatch
-- weak fetch metadata on protected state-changing requests
-- missing visitor-cookie continuity on protected routes
-- protected state-changing requests without recent interaction
-- route bursts per visitor and, when configured, IP address
-
-Each contribution includes a stable `ruleId` and score. Rules can be disabled
-or rescored:
+Rules support disabling or rescoring:
 
 ```ts
-createNoSkrapProxy({
-  secret: process.env.NOSKRAP_SECRET!,
-  rules: [
-    { id: "browser.automationUa", score: 20 },
-    { id: "headers.uaClientHintsMismatch", enabled: false },
-  ],
-});
+rules: [
+  { id: "browser.automationUa", score: 20 },
+  { id: "headers.uaClientHintsMismatch", enabled: false },
+]
 ```
+
+## Migration from 0.3.0
+
+- `recordTelemetry` returns `TelemetryResult`, not a scored `BotResult`.
+- `getNoSkrapDecision` reuses the proxy policy when its signed context is valid;
+  share configuration or use `scoreRequest` for a separate policy.
+- Custom storage must merge timestamps atomically; Redis clients now require
+  Lua support. Pass node-redis and Upstash through their respective adapters.
+- Enforce-mode storage outages now return 503 by default.
+- API challenges return 403 JSON; navigational POST challenges redirect with
+  303. Applications must explicitly retry the original operation after recovery.
+- First cookie-less requests no longer allocate visitor records or counters.
+- Protected children now share their route group's counter.

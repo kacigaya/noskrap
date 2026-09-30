@@ -157,7 +157,7 @@ describe("scoring", () => {
     let result;
     let cookie = "";
 
-    for (let index = 0; index < 31; index += 1) {
+    for (let index = 0; index < 32; index += 1) {
       result = await scoreRequest(
         new Request("https://example.test/api/search", {
           headers: cookie ? { cookie } : undefined,
@@ -467,3 +467,123 @@ function cookieHeader(headers: Headers): string {
     .map((value) => value.split(";")[0])
     .join("; ");
 }
+
+describe("scoring regressions", () => {
+  test("protects root and trailing-slash prefixes without matching siblings", async () => {
+    for (const [route, path, protectedPath] of [
+      ["/", "/checkout", true], ["/checkout/", "/checkout", true],
+      ["/checkout/", "/checkout/cart", true], ["/checkout", "/checkout/", true],
+      ["/checkout", "/checkout-other", false],
+    ] as const) {
+      const result = await scoreRequest(new Request(`https://example.test${path}`, { method: "POST" }), {
+        secret: SECRET, protectedRoutes: [route], storage: new MemoryBotStorage(),
+      });
+      expect(result.reasons.some(reason => reason.ruleId === "behavior.noCookieContinuity")).toBe(protectedPath);
+    }
+    await expect(scoreRequest(new Request("https://example.test/"), { secret: SECRET, protectedRoutes: ["checkout"] })).rejects.toThrow("absolute URL paths");
+  });
+
+  test("aggregates dynamic child paths and does not allocate cookie-less state", async () => {
+    const storage = new MemoryBotStorage(() => 1000);
+    let writes = 0;
+    const configured = { secret: SECRET, protectedRoutes: ["/api/items"], getClientIp: () => "203.0.113.5", storage: {
+      getVisitor: storage.getVisitor.bind(storage), incrementCounter: storage.incrementCounter.bind(storage),
+      setVisitor: async () => { writes++; },
+    } };
+    let result;
+    for (let i = 0; i < 61; i++) result = await scoreRequest(new Request(`https://example.test/api/items/${i}`), configured);
+    expect(result?.reasons.some(reason => reason.ruleId === "rate.routeBurst")).toBe(true);
+    expect(writes).toBe(0);
+  });
+
+  test("a delayed scorer cannot overwrite verified telemetry", async () => {
+    const memory = new MemoryBotStorage(() => 1000);
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const released = new Promise<void>(resolve => { release = resolve; });
+    const config = { secret: SECRET, now: () => 1000, protectedRoutes: ["/"], storage: {
+      getVisitor: memory.getVisitor.bind(memory), setVisitor: memory.setVisitor.bind(memory),
+      incrementCounter: async () => { entered(); await released; return 1; },
+    } };
+    const cookie = `noskrap_visitor=${await signVisitorToken({ id: "v_race" }, SECRET)}`;
+    const score = scoreRequest(new Request("https://example.test/checkout", { method: "POST", headers: { cookie } }), config);
+    await started;
+    try {
+      const recorded = await recordTelemetry(new Request("https://example.test/telemetry", { headers: { cookie } }), config, { interacted: true });
+      expect(recorded.visitorId).toBe("v_race");
+    } finally { release(); }
+    await score;
+    expect((await memory.getVisitor("v_race"))?.lastInteractionAt).toBe(1000);
+    await recordTelemetry(new Request("https://example.test/telemetry", { headers: { cookie } }), config, { interacted: false });
+    expect((await memory.getVisitor("v_race"))?.lastInteractionAt).toBe(1000);
+  });
+
+  test("memory updates preserve newest timestamps and isolate returned records", async () => {
+    const storage = new MemoryBotStorage(() => 1000);
+    await storage.setVisitor("v_a", { id: "v_a", lastSeen: 200, lastInteractionAt: 200 }, 600);
+    await storage.setVisitor("v_a", { id: "v_a", lastSeen: 100, lastInteractionAt: 100 }, 600);
+    const visitor = await storage.getVisitor("v_a");
+    expect(visitor).toEqual({ id: "v_a", lastSeen: 200, lastInteractionAt: 200 });
+    visitor!.lastInteractionAt = 0;
+    expect((await storage.getVisitor("v_a"))?.lastInteractionAt).toBe(200);
+  });
+
+  test("storage errors and timeouts mark scoring unavailable", async () => {
+    for (const incrementCounter of [async () => { throw new Error("offline"); }, () => new Promise<number>(() => {})]) {
+      const result = await scoreRequest(new Request("https://example.test/"), {
+        secret: SECRET, storageTimeoutMs: 10, getClientIp: () => "203.0.113.1",
+        storage: { getVisitor: async () => null, setVisitor: async () => {}, incrementCounter },
+      });
+      expect(result.scoringAvailable).toBe(false);
+      expect(result.reasons.some(reason => reason.ruleId === "rate.routeBurst")).toBe(false);
+    }
+  });
+
+  test("Unicode visitor ids round-trip alongside legacy tokens", async () => {
+    for (const id of ["用户", "café", "v_🔒"]) {
+      const token = await signVisitorToken({ id }, SECRET);
+      expect(await verifyVisitorToken(token, SECRET)).toEqual({ id });
+    }
+    const body = btoa(JSON.stringify({ id: "café" })).replaceAll("=", "");
+    const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body)));
+    const encoded = btoa(String.fromCharCode(...signature)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+    expect(await verifyVisitorToken(`${body}.${encoded}`, SECRET)).toEqual({ id: "café" });
+  });
+});
+
+// The stored timestamp 0 is valid; a future timestamp must not lower risk.
+test("interaction boundaries and longest protected route buckets", async () => {
+  let now = 0;
+  const storage = new MemoryBotStorage(() => now);
+  const config = { secret: SECRET, storage, now: () => now, protectedRoutes: ["/", "/api/"] };
+  const cookie = `noskrap_visitor=${await signVisitorToken({ id: "v_boundaries" }, SECRET)}`;
+  const request = new Request("https://example.test/api/update", { method: "POST", headers: { cookie, "sec-fetch-mode": "cors" } });
+  await recordTelemetry(request, config, { interacted: true });
+  expect((await scoreRequest(request, config)).reasons).toEqual([]);
+  now = -1;
+  expect((await scoreRequest(request, config)).reasons.some(reason => reason.ruleId === "behavior.noRecentInteraction")).toBe(true);
+  now = 600000;
+  expect((await scoreRequest(request, config)).reasons.some(reason => reason.ruleId === "behavior.noRecentInteraction")).toBe(true);
+  const keys: string[] = [];
+  storage.incrementCounter = async key => { keys.push(key); return 1; };
+  await scoreRequest(request, config);
+  expect(keys).toEqual(["visitor:v_boundaries:/api"]);
+});
+
+test("disabled storage rules do not depend on backing services", async () => {
+  const fail = async (): Promise<never> => { throw new Error("must not call storage"); };
+  const result = await scoreRequest(new Request("https://example.test/checkout", {
+    method: "POST", headers: { "sec-fetch-mode": "cors", cookie: `noskrap_visitor=${await signVisitorToken({ id: "v_disabled" }, SECRET)}` },
+  }), {
+    secret: SECRET, protectedRoutes: ["/"], getClientIp: () => "trusted",
+    rules: [{ id: "rate.routeBurst", enabled: false }, { id: "behavior.noRecentInteraction", enabled: false }],
+    storage: { getVisitor: fail, setVisitor: fail, incrementCounter: fail },
+  });
+  expect(result.scoringAvailable).toBe(true);
+  expect(result.reasons).toEqual([]);
+  await expect(scoreRequest(new Request("https://example.test/"), {
+    secret: SECRET, storageTimeoutMs: 2147483648,
+  })).rejects.toThrow("2147483647");
+});

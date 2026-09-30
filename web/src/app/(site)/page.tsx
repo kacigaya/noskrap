@@ -64,7 +64,7 @@ const INSTALL = `bun add noskrap`;
 
 export default function Home() {
   return (
-    <main id="main-content" className="flex flex-1 flex-col">
+    <>
       {/* Nav */}
       <header className="sticky top-0 z-20 px-4 pt-4">
         <div className="mx-auto flex w-full max-w-6xl items-center justify-between rounded-2xl border bg-background/70 px-5 py-3 shadow-sm backdrop-blur-md">
@@ -93,69 +93,75 @@ export default function Home() {
         </div>
       </header>
 
-      {/* Hero */}
-      <section className="mx-auto flex w-full max-w-5xl flex-col items-center px-6 py-24 text-center">
-        <Image
-          src={asset("/noskrap-logo.svg")}
-          alt="NoSkrap logo"
-          width={96}
-          height={96}
-          className="mb-8"
-          loading="eager"
-        />
-        <Badge variant="secondary" className="mb-6">
-          Next.js · TypeScript · Bot-risk scoring
-        </Badge>
-        <h1 className="font-heading text-5xl font-bold tracking-tight sm:text-6xl">
-          Protect Next.js routes without guessing who is human
-        </h1>
-        <p className="mt-6 max-w-2xl text-lg text-muted-foreground">
-          NoSkrap gives every request an explainable risk score. Start by
-          watching traffic, then challenge or block the routes that bots make
-          expensive.
-        </p>
-        <div className="mt-10 flex flex-col gap-3 sm:flex-row">
-          <Button size="xl" render={<Link href={DOCS_URL} />}>
-            View Documentation
-          </Button>
-          <Button size="xl" variant="outline" render={<a href={GITHUB_URL} />}>
-            Star on GitHub
-          </Button>
-        </div>
-      </section>
+      <main id="main-content" tabIndex={-1} className="flex flex-1 flex-col">
+        {/* Hero */}
+        <section className="mx-auto flex w-full max-w-5xl flex-col items-center px-6 py-24 text-center">
+          <Image
+            src={asset("/noskrap-logo.svg")}
+            alt="NoSkrap logo"
+            width={96}
+            height={96}
+            className="mb-8"
+            loading="eager"
+          />
+          <Badge variant="secondary" className="mb-6">
+            Next.js · TypeScript · Bot-risk scoring
+          </Badge>
+          <h1 className="font-heading text-5xl font-bold tracking-tight sm:text-6xl">
+            Protect Next.js routes without guessing who is human
+          </h1>
+          <p className="mt-6 max-w-2xl text-lg text-muted-foreground">
+            NoSkrap gives every request an explainable risk score. Start by
+            watching traffic, then challenge or block the routes that bots make
+            expensive.
+          </p>
+          <div className="mt-10 flex flex-col gap-3 sm:flex-row">
+            <Button size="xl" render={<Link href={DOCS_URL} />}>
+              View Documentation
+            </Button>
+            <Button size="xl" variant="outline" render={<a href={GITHUB_URL} />}>
+              Star on GitHub
+            </Button>
+          </div>
+        </section>
 
-      {/* Install */}
-      <section className="mx-auto w-full max-w-3xl px-6 pb-24">
-        <CodeBlock code={INSTALL} lang="bash" />
-      </section>
+        {/* Install */}
+        <section className="mx-auto w-full max-w-3xl px-6 pb-24">
+          <CodeBlock code={INSTALL} lang="bash" />
+        </section>
 
-      {/* Features */}
-      <section className="mx-auto w-full max-w-5xl px-6 pb-24">
-        <h2 className="mb-10 text-center font-heading text-3xl font-bold tracking-tight">
-          Built for the messy middle between allow and block
-        </h2>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {FEATURES.map((feature) => (
-            <Card key={feature.title}>
-              <CardHeader>
-                <CardTitle>{feature.title}</CardTitle>
-                <CardDescription>{feature.description}</CardDescription>
-              </CardHeader>
-            </Card>
-          ))}
-        </div>
-      </section>
+        {/* Features */}
+        <section className="mx-auto w-full max-w-5xl px-6 pb-24">
+          <h2 className="mb-10 text-center font-heading text-3xl font-bold tracking-tight">
+            Built for the messy middle between allow and block
+          </h2>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {FEATURES.map((feature) => (
+              <Card key={feature.title}>
+                <CardHeader>
+                  <CardTitle>{feature.title}</CardTitle>
+                  <CardDescription>{feature.description}</CardDescription>
+                </CardHeader>
+              </Card>
+            ))}
+          </div>
+        </section>
 
-      {/* Quickstart */}
-      <section className="mx-auto w-full max-w-3xl px-6 pb-24">
-        <h2 className="mb-6 text-center font-heading text-3xl font-bold tracking-tight">
-          Quickstart
-        </h2>
-        <CodeBlock code={QUICKSTART} lang="ts" />
-      </section>
+        {/* Quickstart */}
+        <section className="mx-auto w-full max-w-3xl px-6 pb-24">
+          <h2 className="mb-6 text-center font-heading text-3xl font-bold tracking-tight">
+            Quickstart
+          </h2>
+          <p className="mb-4 text-sm text-muted-foreground">
+            Next.js 16: proxy.ts with the proxy export. Next.js 15: middleware.ts
+            with the middleware export. Use shared storage in production.
+          </p>
+          <CodeBlock code={QUICKSTART} lang="ts" />
+        </section>
 
+      </main>
       {/* Footer */}
       <SiteFooter />
-    </main>
+    </>
   );
 }

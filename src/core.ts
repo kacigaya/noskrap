@@ -13,6 +13,7 @@ export interface VisitorState {
 
 export interface BotStorage {
   getVisitor(id: string): Promise<VisitorState | null>;
+  // Atomically preserve the newest lastSeen/lastInteractionAt timestamps.
   setVisitor(
     id: string,
     state: VisitorState,
@@ -33,6 +34,8 @@ export interface NoSkrapConfig {
   protectedRoutes?: string[];
   challengePath?: string;
   challengeTtlSeconds?: number;
+  storageTimeoutMs?: number;
+  storageFailureMode?: "open" | "closed";
   getClientIp?: (request: Request) => string | null | undefined;
   storage?: BotStorage;
   thresholds?: {
@@ -50,7 +53,20 @@ export interface BotResult {
   reasons: BotReason[];
   visitorId: string;
   challengePassed: boolean;
+  scoringAvailable: boolean;
   headers: Headers;
+}
+
+export interface TelemetryResult {
+  visitorId: string;
+  headers: Headers;
+}
+
+export class BotStorageError extends Error {
+  constructor(cause: unknown) {
+    super("NoSkrap storage unavailable", { cause });
+    this.name = "BotStorageError";
+  }
 }
 
 export interface TelemetryPayload {
@@ -81,12 +97,6 @@ export async function scoreRequest(
     ? await verifyVisitorToken(token, config.secret)
     : null;
   const visitorId = tokenPayload?.id ?? createId();
-  const existing = await storage.getVisitor(visitorId);
-  const visitor: VisitorState = {
-    id: visitorId,
-    lastSeen: now,
-    lastInteractionAt: existing?.lastInteractionAt,
-  };
 
   const reasons: BotReason[] = [];
   const addReason = (ruleId: string, score: number) => {
@@ -95,10 +105,11 @@ export async function scoreRequest(
   };
 
   const url = new URL(request.url);
-  const isProtected = matchesProtectedRoute(
+  const protectedRoute = matchingProtectedRoute(
     url.pathname,
     config.protectedRoutes,
   );
+  const isProtected = protectedRoute !== null;
   const headers = request.headers;
   const userAgent = headers.get("user-agent") ?? "";
   const accept = headers.get("accept") ?? "";
@@ -131,49 +142,45 @@ export async function scoreRequest(
     addReason("headers.badFetchMetadata", 20);
   }
 
-  if (!tokenPayload && existing === null && isProtected) {
+  if (!tokenPayload && isProtected) {
     addReason("behavior.noCookieContinuity", 15);
   }
 
-  if (
-    isProtected &&
-    isUnsafeMethod(request.method) &&
-    (!visitor.lastInteractionAt ||
-      now - visitor.lastInteractionAt > INTERACTION_TTL_MS)
-  ) {
-    addReason("behavior.noRecentInteraction", 30);
-  }
-
-  const ip = config.getClientIp?.(request)?.trim();
-  const ipCount = ip
-    ? await storage.incrementCounter(
-        `ip:${ip}:${url.pathname}`,
-        RATE_WINDOW_SECONDS,
-      )
-    : 0;
-  const visitorCount = await storage.incrementCounter(
-    `visitor:${visitorId}:${url.pathname}`,
-    RATE_WINDOW_SECONDS,
-  );
-  if (ipCount > 60 || visitorCount > 30) {
-    addReason("rate.routeBurst", 35);
+  const rateEnabled = ruleScore(config, "rate.routeBurst", 35) > 0;
+  const interactionEnabled = ruleScore(config, "behavior.noRecentInteraction", 30) > 0;
+  const ip = rateEnabled ? config.getClientIp?.(request)?.trim() : undefined;
+  const routeKey = protectedRoute ?? "*";
+  let scoringAvailable = true;
+  try {
+    const [existing, ipCount, visitorCount] = await storageOperation(
+      () => Promise.all([
+        interactionEnabled && tokenPayload && isProtected && isUnsafeMethod(request.method)
+          ? storage.getVisitor(visitorId)
+          : Promise.resolve(null),
+        ip ? storage.incrementCounter(`ip:${ip}:${routeKey}`, RATE_WINDOW_SECONDS) : Promise.resolve(0),
+        rateEnabled && tokenPayload ? storage.incrementCounter(`visitor:${visitorId}:${routeKey}`, RATE_WINDOW_SECONDS) : Promise.resolve(0),
+      ]),
+      config,
+    );
+    const interaction = existing?.lastInteractionAt;
+    if (
+      interactionEnabled && isProtected && isUnsafeMethod(request.method) &&
+      (interaction === undefined || interaction > now ||
+        now - interaction >= INTERACTION_TTL_MS)
+    ) {
+      addReason("behavior.noRecentInteraction", 30);
+    }
+    if (ipCount > 60 || visitorCount > 30) addReason("rate.routeBurst", 35);
+  } catch (error) {
+    if (!(error instanceof BotStorageError)) throw error;
+    scoringAvailable = false;
   }
 
   const score = Math.min(
     100,
     reasons.reduce((sum, reason) => sum + reason.score, 0),
   );
-  await storage.setVisitor(visitorId, visitor, VISITOR_TTL_SECONDS);
-
-  const signedToken = await signVisitorToken(
-    { id: visitorId },
-    firstSecret(config.secret),
-  );
-  const responseHeaders = new Headers();
-  responseHeaders.append(
-    "set-cookie",
-    `${VISITOR_COOKIE}=${signedToken}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${VISITOR_TTL_SECONDS}`,
-  );
+  const responseHeaders = await visitorHeaders(visitorId, config.secret);
   const decision = decisionForScore(score, thresholds);
   const challengePassed =
     decision === "challenge" && await verifyChallengePass(request, config);
@@ -184,6 +191,7 @@ export async function scoreRequest(
     reasons,
     visitorId,
     challengePassed,
+    scoringAvailable,
     headers: responseHeaders,
   };
 }
@@ -192,25 +200,43 @@ export async function recordTelemetry(
   request: Request,
   config: NoSkrapConfig,
   payload: TelemetryPayload,
-): Promise<BotResult> {
-  const result = await scoreRequest(request, config);
+): Promise<TelemetryResult> {
+  validateConfig(config);
+  if (typeof payload.interacted !== "boolean") throw new TypeError("interacted must be a boolean");
+  const token = getCookie(request, VISITOR_COOKIE);
+  const visitor = token ? await verifyVisitorToken(token, config.secret) : null;
+  const visitorId = visitor?.id ?? createId();
   const now = config.now?.() ?? Date.now();
   const storage = config.storage ?? getDefaultStorage();
-  const existing = await storage.getVisitor(result.visitorId);
+  if (payload.interacted) {
+    await storageOperation(() => storage.setVisitor(
+      visitorId,
+      { id: visitorId, lastSeen: now, lastInteractionAt: now },
+      INTERACTION_TTL_MS / 1000,
+    ), config);
+  }
+  return { visitorId, headers: await visitorHeaders(visitorId, config.secret) };
+}
 
-  await storage.setVisitor(
-    result.visitorId,
-    {
-      id: result.visitorId,
-      lastSeen: now,
-      lastInteractionAt: payload.interacted
-        ? now
-        : existing?.lastInteractionAt,
-    },
-    VISITOR_TTL_SECONDS,
-  );
+async function visitorHeaders(visitorId: string, secret: string | string[]): Promise<Headers> {
+  const token = await signVisitorToken({ id: visitorId }, firstSecret(secret));
+  return new Headers({ "set-cookie": `${VISITOR_COOKIE}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${VISITOR_TTL_SECONDS}` });
+}
 
-  return result;
+async function storageOperation<T>(operation: () => Promise<T>, config: NoSkrapConfig): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(operation),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("storage operation timed out")), config.storageTimeoutMs ?? 1000);
+      }),
+    ]);
+  } catch (error) {
+    throw new BotStorageError(error);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function createChallengePassHeaders(
@@ -264,6 +290,7 @@ export async function verifyChallengePass(
 }
 
 export class MemoryBotStorage implements BotStorage {
+  private sweepTimes = new WeakMap<object, number>();
   private visitors = new Map<
     string,
     { value: VisitorState; expiresAt: number }
@@ -285,7 +312,7 @@ export class MemoryBotStorage implements BotStorage {
       this.visitors.delete(id);
       return null;
     }
-    return entry.value;
+    return { ...entry.value };
   }
 
   async setVisitor(
@@ -293,14 +320,23 @@ export class MemoryBotStorage implements BotStorage {
     state: VisitorState,
     ttlSeconds: number,
   ): Promise<void> {
+    validateVisitorState(id, state, ttlSeconds);
+    const previous = this.visitors.get(id);
+    const existing = previous && previous.expiresAt > this.now() ? previous.value : undefined;
+    const lastInteractionAt = Math.max(existing?.lastInteractionAt ?? -Infinity, state.lastInteractionAt ?? -Infinity);
     this.makeRoom(this.visitors, id);
     this.visitors.set(id, {
-      value: state,
+      value: {
+        id,
+        lastSeen: Math.max(existing?.lastSeen ?? -Infinity, state.lastSeen),
+        ...(lastInteractionAt === -Infinity ? {} : { lastInteractionAt }),
+      },
       expiresAt: this.now() + ttlSeconds * 1000,
     });
   }
 
   async incrementCounter(key: string, windowSeconds: number): Promise<number> {
+    validateWindow(windowSeconds);
     const existing = this.counters.get(key);
     if (!existing || existing.expiresAt <= this.now()) {
       this.makeRoom(this.counters, key);
@@ -321,8 +357,12 @@ export class MemoryBotStorage implements BotStorage {
     if (map.has(nextKey) || map.size < this.maxEntries) return;
 
     const now = this.now();
-    for (const [key, entry] of map) {
-      if (entry.expiresAt <= now) map.delete(key);
+    // Sweep at most once per second, not once per insertion under a flood.
+    if (now - (this.sweepTimes.get(map) ?? -Infinity) >= 1000) {
+      this.sweepTimes.set(map, now);
+      for (const [key, entry] of map) {
+        if (entry.expiresAt <= now) map.delete(key);
+      }
     }
 
     if (map.size >= this.maxEntries) {
@@ -351,7 +391,7 @@ function getDefaultStorage(): MemoryBotStorage {
     console.warn(
       "NoSkrap: no `storage` configured, falling back to in-memory storage. " +
         "State is process-local, so rate limiting and interaction continuity " +
-        "degrade on serverless, edge, and multi-instance deployments. " +
+        "degrade across Next.js proxy/route bundles and serverless, edge, or multi-instance deployments. " +
         "Pass a shared `storage` implementation in production.",
     );
   }
@@ -364,8 +404,8 @@ export async function signVisitorToken(
   secret: string,
 ): Promise<string> {
   validateSecrets(secret);
-  if (!payload.id) throw new TypeError("visitor id is required");
-  const body = base64UrlEncode(JSON.stringify(payload));
+  if (typeof payload.id !== "string" || !payload.id) throw new TypeError("visitor id is required");
+  const body = encodeJson(payload);
   const signature = await hmac(body, secret);
   return `${body}.${signature}`;
 }
@@ -399,7 +439,7 @@ async function signChallengePassToken(
   payload: { id: string; expiresAt: number },
   secret: string,
 ): Promise<string> {
-  const body = base64UrlEncode(JSON.stringify(payload));
+  const body = encodeJson(payload);
   const signature = await hmac(body, secret);
   return `${body}.${signature}`;
 }
@@ -444,13 +484,20 @@ function isUnsafeMethod(method: string): boolean {
   return !["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase());
 }
 
-function matchesProtectedRoute(
+function matchingProtectedRoute(
   pathname: string,
   protectedRoutes: string[] = [],
-): boolean {
-  return protectedRoutes.some(
-    (route) => pathname === route || pathname.startsWith(`${route}/`),
-  );
+): string | null {
+  const normalizedPath = pathname.replace(/\/+$/, "") || "/";
+  let match: string | null = null;
+  for (const path of protectedRoutes) {
+    const route = path.replace(/\/+$/, "") || "/";
+    if (
+      (route === "/" || normalizedPath === route || normalizedPath.startsWith(`${route}/`)) &&
+      (match === null || route.length > match.length)
+    ) match = route;
+  }
+  return match;
 }
 
 function getCookie(request: Request, name: string): string | null {
@@ -480,8 +527,17 @@ function firstSecret(secret: string | string[]): string {
   return Array.isArray(secret) ? secret[0] : secret;
 }
 
-function validateConfig(config: NoSkrapConfig): void {
+export function validateConfig(config: NoSkrapConfig): void {
   validateSecrets(config.secret);
+  if (config.protectedRoutes?.some(route => typeof route !== "string" || !route.startsWith("/") || route.startsWith("//") || /[?#\\]/.test(route))) {
+    throw new TypeError("protectedRoutes must contain absolute URL paths");
+  }
+  if (config.storageTimeoutMs !== undefined && (!Number.isSafeInteger(config.storageTimeoutMs) || config.storageTimeoutMs < 1 || config.storageTimeoutMs > 2_147_483_647)) {
+    throw new TypeError("storageTimeoutMs must be an integer from 1 to 2147483647");
+  }
+  if (config.storageFailureMode !== undefined && !["open", "closed"].includes(config.storageFailureMode)) {
+    throw new TypeError('storageFailureMode must be "open" or "closed"');
+  }
   if (
     config.mode !== undefined &&
     !["observe", "enforce"].includes(config.mode)
@@ -526,6 +582,18 @@ function validateConfig(config: NoSkrapConfig): void {
     ) {
       throw new TypeError("rules require an id and a non-negative score");
     }
+  }
+}
+
+export function validateWindow(seconds: number): void {
+  if (!Number.isSafeInteger(seconds) || seconds < 1) throw new TypeError("window/ttl must be a positive safe integer");
+}
+
+export function validateVisitorState(id: string, state: VisitorState, ttlSeconds: number): void {
+  validateWindow(ttlSeconds);
+  if (!id || state.id !== id || !Number.isFinite(state.lastSeen) ||
+    (state.lastInteractionAt !== undefined && !Number.isFinite(state.lastInteractionAt))) {
+    throw new TypeError("visitor state must have a matching id and finite timestamps");
   }
 }
 
@@ -603,4 +671,10 @@ function base64UrlDecode(value: string): string {
     "=",
   );
   return atob(padded.replaceAll("-", "+").replaceAll("_", "/"));
+}
+
+function encodeJson(payload: object): string {
+  // ASCII escapes preserve the existing token decoder and legacy Latin-1 tokens.
+  return base64UrlEncode(JSON.stringify(payload).replace(/[\u007f-\uffff]/g,
+    character => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`));
 }

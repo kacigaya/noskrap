@@ -45,7 +45,7 @@ export default function DocsLayout({
             <DocsSidebar />
           </div>
         </aside>
-        <main id="main-content" className="min-w-0 flex-1 py-6 md:py-10">
+        <main id="main-content" tabIndex={-1} className="min-w-0 flex-1 py-6 md:py-10">
           <details className="mb-8 rounded-xl border p-4 md:hidden">
             <summary className="cursor-pointer font-medium">
               Documentation

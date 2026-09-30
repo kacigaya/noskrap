@@ -3,7 +3,7 @@ declare module "next/server" {
     cookies: {
       set(name: string, value: string, init?: ResponseCookieInit): void;
     };
-    static next(): NextResponse;
+    static next(init?: { request?: { headers?: Headers } }): NextResponse;
     static redirect(url: URL | string, init?: ResponseInit): NextResponse;
   }
 

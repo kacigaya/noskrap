@@ -1,17 +1,20 @@
 import type { Metadata } from "next";
+import { SITE_URL, SOCIAL_IMAGE } from "@/lib/site";
 import Link from "next/link";
 
 export const metadata: Metadata = {
   title: "Legal notice",
   description: "Publisher, hosting, and intellectual property information for NoSkrap.",
-  alternates: { canonical: "https://kacigaya.github.io/noskrap/legal-notice/" },
+  alternates: { canonical: `${SITE_URL}/legal-notice/` },
   openGraph: {
+    images: [SOCIAL_IMAGE],
     title: "Legal notice | NoSkrap",
     description: "Publisher, hosting, and intellectual property information for NoSkrap.",
     type: "website",
-    url: "https://kacigaya.github.io/noskrap/legal-notice/",
+    url: `${SITE_URL}/legal-notice/`,
   },
   twitter: {
+    images: [SOCIAL_IMAGE.url],
     card: "summary",
     title: "Legal notice | NoSkrap",
     description: "Publisher, hosting, and intellectual property information for NoSkrap.",
