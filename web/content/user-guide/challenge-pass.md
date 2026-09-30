@@ -9,9 +9,10 @@ NoSkrap does not provide a CAPTCHA vendor integration. Verify the visitor with y
 ```ts
 // app/api/noskrap/challenge-pass/route.ts
 import { createNoSkrapChallengePassHandler } from "noskrap/next";
+import { noSkrapConfig } from "@/lib/noskrap";
 
 export const POST = createNoSkrapChallengePassHandler({
-  secret: process.env.NOSKRAP_SECRET!,
+  ...noSkrapConfig,
   verifyChallenge: (request) => verifyYourCaptcha(request),
 });
 ```
@@ -23,12 +24,14 @@ request must also contain the signed visitor cookie created by the proxy.
 
 ```ts
 import { createNoSkrapProxy } from "noskrap/next";
+import { noSkrapConfig } from "@/lib/noskrap";
 
 export const proxy = createNoSkrapProxy({
-  secret: process.env.NOSKRAP_SECRET!,
+  ...noSkrapConfig,
   mode: "enforce",
   protectedRoutes: ["/api/search", "/checkout"],
   challengePath: "/bot-check",
+  recoveryRoutes: ["/api/noskrap/telemetry", "/api/noskrap/challenge-pass"],
 });
 ```
 
@@ -62,10 +65,14 @@ The pass defaults to 10 minutes.
 
 ```ts
 createNoSkrapChallengePassHandler({
-  secret: process.env.NOSKRAP_SECRET!,
+  ...noSkrapConfig,
   challengeTtlSeconds: 5 * 60,
   verifyChallenge: (request) => verifyYourCaptcha(request),
 });
 ```
 
 The pass only downgrades `challenge` to `allow`. `block` decisions still block.
+
+API clients receive 403 JSON with `challengeUrl`; show that page and explicitly
+retry the original operation after a pass. Form POSTs use 303 so their bodies
+are not replayed to the challenge page. Original POST bodies are not stored.

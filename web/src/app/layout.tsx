@@ -3,7 +3,7 @@ import { Geist_Mono, Inter } from "next/font/google";
 import "./globals.css";
 import { cn } from "@/lib/utils";
 import { ThemeProvider } from "@/components/theme-provider";
-import { SITE_DESCRIPTION, SITE_NAME, SITE_URL } from "@/lib/site";
+import { SITE_DESCRIPTION, SITE_NAME, SITE_URL, SOCIAL_IMAGE } from "@/lib/site";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -27,6 +27,7 @@ export const metadata: Metadata = {
   applicationName: SITE_NAME,
   alternates: { canonical: "/" },
   openGraph: {
+    images: [SOCIAL_IMAGE],
     type: "website",
     siteName: SITE_NAME,
     url: "/",
@@ -34,6 +35,7 @@ export const metadata: Metadata = {
     description: SITE_DESCRIPTION,
   },
   twitter: {
+    images: [SOCIAL_IMAGE.url],
     card: "summary_large_image",
     title: TITLE,
     description: SITE_DESCRIPTION,

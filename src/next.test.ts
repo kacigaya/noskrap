@@ -11,8 +11,15 @@ const SECRET = "test-secret-with-at-least-32-bytes";
 
 mock.module("next/server", () => ({
   NextResponse: {
-    next: () => new Response(null),
-    redirect: (url: URL) => Response.redirect(url),
+    next: (init?: { request?: { headers?: Headers } }) => {
+      const headers = new Headers();
+      if (init?.request?.headers) {
+        headers.set("x-middleware-override-headers", Array.from(init.request.headers.keys()).join(","));
+        init.request.headers.forEach((value, key) => headers.set(`x-middleware-request-${key}`, value));
+      }
+      return new Response(null, { headers });
+    },
+    redirect: (url: URL, init?: ResponseInit) => Response.redirect(url, init?.status ?? 307),
   },
 }));
 
@@ -106,7 +113,7 @@ test("proxy reports observed decisions", async () => {
   const observations: object[] = [];
   const proxy = createNoSkrapProxy({
     secret: SECRET,
-    onDecision: (result) => observations.push(result),
+    onDecision: (result) => { observations.push(result); },
   });
 
   const response = await proxy(new Request("https://example.test/"));
@@ -118,6 +125,7 @@ test("proxy reports observed decisions", async () => {
       score: 0,
       reasons: [],
       challengePassed: false,
+      scoringAvailable: true,
     },
   ]);
   expect("headers" in observations[0]!).toBe(false);
@@ -173,9 +181,7 @@ test("proxy redirects challenged visitors and keeps the cookie", async () => {
     }),
   );
 
-  // The mocked NextResponse.redirect answers 302; Next.js itself sends 307.
-  expect(response?.status).toBeGreaterThanOrEqual(300);
-  expect(response?.status).toBeLessThan(400);
+  expect(response.status).toBe(307);
   expect(new URL(response!.headers.get("location")!).pathname).toBe(
     "/bot-check",
   );
@@ -189,7 +195,7 @@ test("proxy lets challenge decisions through without a challenge path", async ()
     mode: "enforce",
     storage: new MemoryBotStorage(),
     thresholds: { observe: 10, challenge: 20, block: 95 },
-    onDecision: (result) => observations.push(result),
+    onDecision: (result) => { observations.push(result); },
   });
 
   const response = await proxy(
@@ -374,4 +380,92 @@ test("telemetry handler rejects a body that is not JSON", async () => {
   );
 
   expect(response.status).toBe(400);
+});
+
+function forwardedRequest(request: Request, response: Response): Request {
+  const headers = new Headers(request.headers);
+  for (const name of (response.headers.get("x-middleware-override-headers") ?? "").split(",")) {
+    const value = response.headers.get(`x-middleware-request-${name}`);
+    if (name && value !== null) headers.set(name, value);
+  }
+  return new Request(request, { headers });
+}
+
+test("proxy decision is reused with one counter increment and a stable first cookie", async () => {
+  let increments = 0;
+  const storage = new MemoryBotStorage();
+  const original = storage.incrementCounter.bind(storage);
+  storage.incrementCounter = async (key, window) => { increments++; return original(key, window); };
+  const config = { secret: SECRET, storage, protectedRoutes: ["/api"], getClientIp: () => "trusted" };
+  const request = new Request("https://example.test/api/check", { headers: { cookie: "session=keep" } });
+  const response = await createNoSkrapProxy(config)(request);
+  const forwarded = forwardedRequest(request, response);
+  const result = await getNoSkrapDecision(forwarded, config);
+  expect(increments).toBe(1);
+  expect(result.score).toBe(15);
+  expect(result.headers.get("set-cookie")).toBe(response.headers.get("set-cookie"));
+  expect(forwarded.headers.get("cookie")).toContain("session=keep");
+});
+
+test("contexts reject tampering, changed URL/method/cookie, expiry and wrong secrets", async () => {
+  let now = 1000;
+  const config = { secret: SECRET, storage: new MemoryBotStorage(), now: () => now };
+  const request = new Request("https://example.test/api/check?long=" + "x".repeat(20000));
+  const response = await createNoSkrapProxy(config)(request);
+  const forwarded = forwardedRequest(request, response);
+  const token = forwarded.headers.get("x-noskrap-context")!;
+  expect(token.length).toBeLessThan(8192);
+  const { readContext } = await import("./context");
+  expect(await readContext(forwarded, config)).not.toBeNull();
+  for (const altered of [
+    new Request("https://example.test/other", { headers: forwarded.headers }),
+    new Request(forwarded.url, { method: "POST", headers: forwarded.headers }),
+    new Request(forwarded.url, { headers: { "x-noskrap-context": token, cookie: "noskrap_visitor=other" } }),
+    new Request(forwarded.url, { headers: { ...Object.fromEntries(forwarded.headers), "x-noskrap-context": token + "x" } }),
+  ]) expect(await readContext(altered, config)).toBeNull();
+  expect(await readContext(forwarded, { ...config, secret: "another-secret-with-at-least-32-bytes" })).toBeNull();
+  now += 30000;
+  expect(await readContext(forwarded, config)).toBeNull();
+});
+
+test("challenge uses 303 for form POST and structured 403 for fetch requests", async () => {
+  const proxy = createNoSkrapProxy({ secret: SECRET, storage: new MemoryBotStorage(), mode: "enforce", challengePath: "/bot-check", thresholds: { observe: 10, challenge: 20, block: 95 } });
+  const form = await proxy(new Request("https://example.test/checkout", { method: "POST", body: "private=form", headers: { "user-agent": "HeadlessChrome", "sec-fetch-mode": "navigate", accept: "text/html" } }));
+  expect(form.status).toBe(303);
+  for (const method of ["POST", "GET"]) {
+    const response = await proxy(new Request("https://example.test/checkout", { method, headers: { "user-agent": "HeadlessChrome", "sec-fetch-mode": "cors" } }));
+    expect(response.status).toBe(403);
+    expect(response.headers.get("location")).toBeNull();
+    expect((await response.json()).challengeUrl).toContain("/bot-check?next=");
+  }
+});
+
+test("recovery bypass is exact and removes client-supplied contexts", async () => {
+  const proxy = createNoSkrapProxy({ secret: SECRET, mode: "enforce", protectedRoutes: ["/"], recoveryRoutes: ["/api/pass/"] });
+  const init = { method: "POST", headers: { "user-agent": "curl/8", "x-noskrap-context": "forged" } };
+  const bypass = await proxy(new Request("https://example.test/api/pass", init));
+  expect(bypass.status).toBe(200);
+  expect(bypass.headers.get("x-middleware-request-x-noskrap-context")).toBeNull();
+  expect((await proxy(new Request("https://example.test/api/pass/child", init))).status).toBe(403);
+});
+
+test("outage defaults are open in observe and closed in enforce, with explicit override", async () => {
+  const storage = new MemoryBotStorage();
+  storage.incrementCounter = async () => { throw new Error("offline"); };
+  for (const [mode, storageFailureMode, status] of [["observe", undefined, 200], ["enforce", undefined, 503], ["enforce", "open", 200], ["observe", "closed", 503]] as const) {
+    const proxy = createNoSkrapProxy({ secret: SECRET, storage, getClientIp: () => "trusted", mode, storageFailureMode });
+    expect((await proxy(new Request("https://example.test/"))).status).toBe(status);
+  }
+});
+
+test("telemetry verifier receives capped raw bytes and failed writes return 503", async () => {
+  const raw = '{ "interacted": true }';
+  const storage = new MemoryBotStorage();
+  storage.setVisitor = async () => { throw new Error("offline"); };
+  const handler = createNoSkrapTelemetryHandler({ secret: SECRET, storage, verifyTelemetry: (_request, _payload, body) => new TextDecoder().decode(body) === raw });
+  expect((await handler(new Request("https://example.test/telemetry", { method: "POST", body: raw }))).status).toBe(503);
+  const challenge = createNoSkrapChallengePassHandler({ secret: SECRET, verifyChallenge: () => true });
+  const response = await challenge(new Request("https://example.test/pass"));
+  expect(response.status).toBe(405);
+  expect(response.headers.get("allow")).toBe("POST");
 });

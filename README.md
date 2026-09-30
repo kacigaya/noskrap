@@ -39,6 +39,26 @@ export const proxy = createNoSkrapProxy({
 });
 ```
 
+The example uses Next.js 16's `proxy.ts`. For Next.js 15, create
+`middleware.ts` instead and export `middleware`:
+
+```ts
+import { createNoSkrapProxy } from "noskrap/next";
+
+export const middleware = createNoSkrapProxy({
+  secret: process.env.NOSKRAP_SECRET!,
+  protectedRoutes: ["/api/search", "/login", "/checkout"],
+});
+export const config = {
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml).*)"],
+};
+```
+
+Use a shared production storage implementation in every entrypoint. The memory
+fallback is for tests and development; Next.js proxy and route bundles can
+have separate stores even on a single server. See the API reference for Redis
+configuration and Edge-compatible adapters.
+
 ## Documentation
 
 - [Quickstart](https://kacigaya.github.io/noskrap/docs/getting-started/quickstart/)

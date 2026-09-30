@@ -11,3 +11,10 @@ export const SITE_NAME = "NoSkrap";
 
 export const SITE_DESCRIPTION =
   "NoSkrap scores Next.js requests with explainable bot-risk signals, signed visitor continuity, interaction telemetry, challenge passes, and enforce-mode redirects.";
+
+export const SOCIAL_IMAGE = {
+  url: `${SITE_URL}/opengraph-image.png`,
+  width: 1200,
+  height: 630,
+  alt: "NoSkrap bot-risk scoring for Next.js",
+};

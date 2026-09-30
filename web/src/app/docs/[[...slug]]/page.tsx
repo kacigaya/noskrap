@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getDoc, getDocSlugs } from "@/lib/docs";
-import { SITE_NAME } from "@/lib/site";
+import { SITE_NAME, SOCIAL_IMAGE } from "@/lib/site";
 import { CodeCopy } from "@/components/code-copy";
 
 export const dynamicParams = false;
@@ -34,12 +34,13 @@ export async function generateMetadata(props: DocPageProps): Promise<Metadata> {
     description: doc.description,
     alternates: { canonical: url },
     openGraph: {
+      images: [SOCIAL_IMAGE],
       type: "article",
       url,
       title: socialTitle,
       description: doc.description,
     },
-    twitter: { title: socialTitle, description: doc.description },
+    twitter: { card: "summary_large_image", images: [SOCIAL_IMAGE.url], title: socialTitle, description: doc.description },
   };
 }
 

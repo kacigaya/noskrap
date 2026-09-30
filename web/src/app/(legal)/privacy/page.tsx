@@ -1,18 +1,21 @@
 import type { Metadata } from "next";
+import { SITE_URL, SOCIAL_IMAGE } from "@/lib/site";
 import Link from "next/link";
 import { LEGAL_UPDATED } from "../updated";
 
 export const metadata: Metadata = {
   title: "Privacy policy",
   description: "How NoSkrap handles data, hosting requests, and your privacy.",
-  alternates: { canonical: "https://kacigaya.github.io/noskrap/privacy/" },
+  alternates: { canonical: `${SITE_URL}/privacy/` },
   openGraph: {
+    images: [SOCIAL_IMAGE],
     title: "Privacy policy | NoSkrap",
     description:
       "How NoSkrap handles data, hosting requests, and your privacy.",
     type: "website",
   },
   twitter: {
+    images: [SOCIAL_IMAGE.url],
     card: "summary",
     title: "Privacy policy | NoSkrap",
     description:

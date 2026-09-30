@@ -1,42 +1,44 @@
 # Route Handlers
 
-Use `getNoSkrapDecision` when a route needs to inspect the decision directly.
+Use `getNoSkrapDecision` when an endpoint needs to inspect or enforce the decision.
 
 ```ts
 import { getNoSkrapDecision } from "noskrap/next";
+import { noSkrapConfig } from "@/lib/noskrap";
 
 export async function POST(request: Request) {
-  const result = await getNoSkrapDecision(request, {
-    secret: process.env.NOSKRAP_SECRET!,
-    protectedRoutes: ["/api/search"],
-  });
-
-  if (result.decision === "block") {
-    return Response.json({ error: "blocked" }, { status: 403 });
+  const result = await getNoSkrapDecision(request, noSkrapConfig);
+  if (!result.scoringAvailable) {
+    return Response.json({ error: "scoring unavailable" }, {
+      status: 503, headers: result.headers,
+    });
   }
-
-  return Response.json({
-    decision: result.decision,
-    score: result.score,
-    reasons: result.reasons,
-    challengePassed: result.challengePassed,
-  });
+  if (result.decision === "block" || result.decision === "challenge") {
+    return Response.json({ error: "verification required" }, {
+      status: 403, headers: result.headers,
+    });
+  }
+  return Response.json({ ok: true }, { headers: result.headers });
 }
 ```
 
-## Reasons
+Define `noSkrapConfig` in one shared module with your secret, protected routes,
+and production storage. Return `result.headers` on every response so visitor
+continuity survives both success and rejection. The example closes on storage
+failure; choose that policy explicitly for endpoints enforcing locally.
 
-Each reason includes a stable `ruleId` and a score contribution.
+When the proxy already scored the request, this helper verifies and reuses its
+signed context instead of incrementing counters again. The context binds the
+URL, method and forwarded visitor cookie, expires after 30 seconds, and requires
+the same secrets in both layers. A handler reached directly scores normally.
+Use the same policy configuration in both layers: the proxy owns the decision
+when its context is valid. Use `scoreRequest` explicitly if you need a different
+policy, accepting another counter increment.
 
-```json
-{
-  "decision": "challenge",
-  "score": 60,
-  "reasons": [
-    { "ruleId": "browser.automationUa", "score": 30 },
-    { "ruleId": "behavior.noRecentInteraction", "score": 30 }
-  ]
-}
-```
+Keep `x-noskrap-context` and Next.js internal request override headers private.
+Do not echo them to clients or log them. Rewrites that change the URL, or
+handlers delayed beyond 30 seconds, cannot reuse the original context and will
+score again.
 
-Use rule ids for logs, dashboards, and tuning.
+Each reason contains a stable `ruleId` and score contribution. Log these on the
+server for tuning; publish them only if your application's API needs them.

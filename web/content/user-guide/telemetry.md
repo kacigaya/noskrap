@@ -8,9 +8,10 @@ verified interaction timestamp.
 ```ts
 // app/api/noskrap/telemetry/route.ts
 import { createNoSkrapTelemetryHandler } from "noskrap/next";
+import { noSkrapConfig } from "@/lib/noskrap";
 
 export const POST = createNoSkrapTelemetryHandler({
-  secret: process.env.NOSKRAP_SECRET!,
+  ...noSkrapConfig,
   verifyTelemetry: (request) => verifyYourTelemetryToken(request),
 });
 ```
@@ -50,3 +51,15 @@ export function NoSkrapBeacon() {
 ```
 
 Recent verified interaction lowers risk for protected state-changing requests.
+
+Use the shared configuration shown in the API reference. Add this exact route
+to the proxy's `recoveryRoutes`, keep verification enabled, and apply abuse
+limits in your application. Include the session or app-issued token required
+by your verifier in the beacon; the minimal fetch above omits token issuance.
+
+`verifyTelemetry(request, payload, rawBody)` receives at most 1,024 bytes of
+raw body for signature verification. The request stream has already been read;
+use `rawBody` rather than calling `request.text()` again. Existing two-argument
+verifiers remain compatible. Successful true telemetry atomically preserves
+the newest timestamp for 10 minutes. False telemetry does not clear it.
+Storage failure returns 503 so clients can retry deliberately.

@@ -32,9 +32,12 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "bun test",
-    "check": "bun run build && bun test && bun pm pack --dry-run && bun run check:web",
+    "check": "bun run build && bun run typecheck:tests && bun test src && bun run test:integration && bun run test:next15 && bun pm pack --dry-run && bun run check:web",
     "check:web": "bun run --cwd web lint && bun run --cwd web build",
-    "prepack": "bun run build"
+    "prepack": "bun run build",
+    "typecheck:tests": "tsc -p tsconfig.test.json",
+    "test:integration": "bun tests/integration.ts",
+    "test:next15": "NOSKRAP_TEST_NEXT_MODULES=tests/next15/node_modules bun tests/integration.ts"
   },
   "peerDependencies": {
     "next": ">=15"
