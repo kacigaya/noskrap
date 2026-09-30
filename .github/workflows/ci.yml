@@ -12,7 +12,7 @@ jobs:
   audit:
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       # Both trees currently report nothing at any severity. Gate at `high` so
@@ -27,7 +27,7 @@ jobs:
   check:
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun install --frozen-lockfile
