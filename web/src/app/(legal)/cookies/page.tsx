@@ -80,6 +80,8 @@ export default function PolicyPage() {
       </p>
       <p>
         <Link href="/privacy">Privacy policy</Link> ·{" "}
+        <Link href="/terms">Terms of use</Link> ·{" "}
+        <Link href="/legal-notice">Legal notice</Link> ·{" "}
         <Link href="/">Back to NoSkrap</Link>
       </p>
     </>
