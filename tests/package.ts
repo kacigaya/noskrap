@@ -10,7 +10,7 @@ try {
   const manifest: unknown = await Bun.file(join(root, "package.json")).json();
   assert(typeof manifest === "object" && manifest !== null);
   assert("name" in manifest && manifest.name === "noskrap");
-  assert("version" in manifest && typeof manifest.version === "string" && /^\d+\.\d+\.\d+$/.test(manifest.version));
+  assert("version" in manifest && typeof manifest.version === "string" && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(manifest.version));
   const filename = `noskrap-${manifest.version}.tgz`;
   const archive = join(directory, filename);
   const pack = Bun.spawn(["bun", "pm", "pack", "--destination", directory], { cwd: root, stdout: "pipe", stderr: "pipe" });
