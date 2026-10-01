@@ -27,3 +27,23 @@ test("failure cancels siblings; success clears deadline", async () => {
   await Bun.sleep(20);
   expect(succeeded?.aborted).toBe(false);
 });
+
+test("in-flight request cancellation reaches work and success removes listeners", async () => {
+  const parent = new AbortController();
+  let received: AbortSignal | undefined;
+  let ready: () => void = () => {};
+  const started = new Promise<void>(resolve => { ready = resolve; });
+  const pending = withDeadline(signal => {
+    received = signal;
+    ready();
+    return new Promise<void>(() => {});
+  }, 1000, parent.signal);
+  await started;
+  parent.abort(new Error("disconnected"));
+  await expect(pending).rejects.toThrow("disconnected");
+  expect(received?.aborted).toBe(true);
+  const completed = new AbortController();
+  await withDeadline(signal => { received = signal; }, 1000, completed.signal);
+  completed.abort();
+  expect(received?.aborted).toBe(false);
+});
