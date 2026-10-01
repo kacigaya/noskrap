@@ -92,7 +92,9 @@ The workflow installs frozen dependency trees, audits all three trees, and runs
 the full gate against Redis 7.4. It tests the packed tarball's four entrypoints
 under Node.js without development dependencies. A separate job publishes that
 same verified tarball; only that job receives permission to request an OIDC
-token. npm CLI 11.21.0 is pinned because trusted publishing requires at least
+token. It checks public version metadata and artifact integrity afterward,
+retrying visibility for up to two minutes. An accepted upload alone is not
+reported as a successful public release. npm CLI 11.21.0 is pinned because trusted publishing requires at least
 11.5.1. npm generates provenance for public packages published this way.
 
 ### One-time account setup
@@ -108,9 +110,25 @@ Build, validate and pack the approved release checkout, then publish its
 npm publish noskrap-X.Y.Z.tgz --access public --registry=https://registry.npmjs.org
 ```
 
-For the already approved v0.4.0 release, use a separate checkout of the v0.4.0
-tag, its frozen dependencies and its full validation gate. Do not publish the
-unmerged branch under the existing 0.4.0 version. npm versions are immutable.
+Use a separate checkout of the approved release tag, its frozen dependencies
+and its full validation gate. Do not publish an unmerged branch under an
+existing release version. npm versions are immutable.
+
+If npm reports that a version already exists as a **staged** package, do not
+try to overwrite it. Sign in to npm's Staged Packages tab, inspect its tarball
+against the tested release artifact, and approve it with account-level 2FA.
+The CLI alternative requires npm 11.15.0 or newer:
+
+```bash
+npm stage list noskrap
+npm stage view STAGE_ID
+npm stage download STAGE_ID
+npm stage approve STAGE_ID
+```
+
+An access token cannot replace the required 2FA approval. A staged version stays
+unavailable to consumers until approved. See npm's
+[staged publishing guide](https://docs.npmjs.com/staged-publishing/).
 
 After the first publication, configure the package's **Trusted Publisher**:
 
@@ -120,6 +138,16 @@ After the first publication, configure the package's **Trusted Publisher**:
 - Workflow filename: `publish.yml`.
 - Allow **direct publishing** with `npm publish`; the default staging-only
   permission does not permit this workflow's publish command.
+
+You can also create the relationship from a locally authenticated npm 11.15.0+
+CLI with account-level 2FA:
+
+```bash
+npm trust github noskrap --repo=kacigaya/noskrap --file=publish.yml --allow-publish --yes
+```
+
+Tokens configured to bypass 2FA are unsupported for this settings operation.
+See the [npm trust command](https://docs.npmjs.com/cli/v11/commands/npm-trust).
 
 This workflow requires GitHub-hosted runners. After setup, future stable
 releases publish automatically. Increment the manifest version in its own
