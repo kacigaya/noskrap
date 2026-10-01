@@ -1,3 +1,5 @@
+import { withDeadline, validateDeadline } from "./deadline.js";
+
 export type BotDecision = "allow" | "observe" | "challenge" | "block";
 
 export interface BotReason {
@@ -12,14 +14,15 @@ export interface VisitorState {
 }
 
 export interface BotStorage {
-  getVisitor(id: string): Promise<VisitorState | null>;
+  getVisitor(id: string, signal?: AbortSignal): Promise<VisitorState | null>;
   // Atomically preserve the newest lastSeen/lastInteractionAt timestamps.
   setVisitor(
     id: string,
     state: VisitorState,
     ttlSeconds: number,
+    signal?: AbortSignal,
   ): Promise<void>;
-  incrementCounter(key: string, windowSeconds: number): Promise<number>;
+  incrementCounter(key: string, windowSeconds: number, signal?: AbortSignal): Promise<number>;
 }
 
 export interface RuleConfig {
@@ -153,14 +156,14 @@ export async function scoreRequest(
   let scoringAvailable = true;
   try {
     const [existing, ipCount, visitorCount] = await storageOperation(
-      () => Promise.all([
+      signal => Promise.all([
         interactionEnabled && tokenPayload && isProtected && isUnsafeMethod(request.method)
-          ? storage.getVisitor(visitorId)
+          ? storage.getVisitor(visitorId, signal)
           : Promise.resolve(null),
-        ip ? storage.incrementCounter(`ip:${ip}:${routeKey}`, RATE_WINDOW_SECONDS) : Promise.resolve(0),
-        rateEnabled && tokenPayload ? storage.incrementCounter(`visitor:${visitorId}:${routeKey}`, RATE_WINDOW_SECONDS) : Promise.resolve(0),
+        ip ? storage.incrementCounter(`ip:${ip}:${routeKey}`, RATE_WINDOW_SECONDS, signal) : Promise.resolve(0),
+        rateEnabled && tokenPayload ? storage.incrementCounter(`visitor:${visitorId}:${routeKey}`, RATE_WINDOW_SECONDS, signal) : Promise.resolve(0),
       ]),
-      config,
+      config, request.signal,
     );
     const interaction = existing?.lastInteractionAt;
     if (
@@ -209,11 +212,11 @@ export async function recordTelemetry(
   const now = config.now?.() ?? Date.now();
   const storage = config.storage ?? getDefaultStorage();
   if (payload.interacted) {
-    await storageOperation(() => storage.setVisitor(
+    await storageOperation(signal => storage.setVisitor(
       visitorId,
       { id: visitorId, lastSeen: now, lastInteractionAt: now },
-      INTERACTION_TTL_MS / 1000,
-    ), config);
+      INTERACTION_TTL_MS / 1000, signal,
+    ), config, request.signal);
   }
   return { visitorId, headers: await visitorHeaders(visitorId, config.secret) };
 }
@@ -223,19 +226,11 @@ async function visitorHeaders(visitorId: string, secret: string | string[]): Pro
   return new Headers({ "set-cookie": `${VISITOR_COOKIE}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${VISITOR_TTL_SECONDS}` });
 }
 
-async function storageOperation<T>(operation: () => Promise<T>, config: NoSkrapConfig): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
+async function storageOperation<T>(operation: (signal: AbortSignal) => Promise<T>, config: NoSkrapConfig, signal: AbortSignal): Promise<T> {
   try {
-    return await Promise.race([
-      Promise.resolve().then(operation),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("storage operation timed out")), config.storageTimeoutMs ?? 1000);
-      }),
-    ]);
+    return await withDeadline(operation, config.storageTimeoutMs ?? 1000, signal);
   } catch (error) {
     throw new BotStorageError(error);
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -532,9 +527,7 @@ export function validateConfig(config: NoSkrapConfig): void {
   if (config.protectedRoutes?.some(route => typeof route !== "string" || !route.startsWith("/") || route.startsWith("//") || /[?#\\]/.test(route))) {
     throw new TypeError("protectedRoutes must contain absolute URL paths");
   }
-  if (config.storageTimeoutMs !== undefined && (!Number.isSafeInteger(config.storageTimeoutMs) || config.storageTimeoutMs < 1 || config.storageTimeoutMs > 2_147_483_647)) {
-    throw new TypeError("storageTimeoutMs must be an integer from 1 to 2147483647");
-  }
+  validateDeadline(config.storageTimeoutMs, "storageTimeoutMs");
   if (config.storageFailureMode !== undefined && !["open", "closed"].includes(config.storageFailureMode)) {
     throw new TypeError('storageFailureMode must be "open" or "closed"');
   }

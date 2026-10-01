@@ -587,3 +587,25 @@ test("disabled storage rules do not depend on backing services", async () => {
     secret: SECRET, storageTimeoutMs: 2147483648,
   })).rejects.toThrow("2147483647");
 });
+
+test("storage receives request cancellation and deadline signals", async () => {
+  let received: AbortSignal | undefined;
+  const config = {
+    secret: "test-secret-with-at-least-32-bytes", storageTimeoutMs: 10,
+    getClientIp: () => "127.0.0.1",
+    storage: {
+      getVisitor: async () => null,
+      setVisitor: async () => {},
+      incrementCounter: (_key: string, _window: number, signal?: AbortSignal) => {
+        received = signal;
+        return new Promise<number>((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason), { once: true }));
+      },
+    },
+  };
+  expect((await scoreRequest(new Request("https://example.test/"), config)).scoringAvailable).toBe(false);
+  expect(received?.aborted).toBe(true);
+  const parent = new AbortController();
+  const pending = scoreRequest(new Request("https://example.test/", { signal: parent.signal }), { ...config, storageTimeoutMs: 1000 });
+  parent.abort();
+  expect((await pending).scoringAvailable).toBe(false);
+});
