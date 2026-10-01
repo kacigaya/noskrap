@@ -92,3 +92,37 @@ jobs:
           archives=(package/*.tgz)
           test "${#archives[@]}" -eq 1
           npm publish "${archives[0]}" --access public --registry=https://registry.npmjs.org
+          export NOSKRAP_RELEASE_ARCHIVE="${archives[0]}"
+          node --input-type=module <<'JS'
+          import assert from "node:assert/strict";
+          import { createHash } from "node:crypto";
+          import { readFileSync } from "node:fs";
+          import { basename } from "node:path";
+          const archive = process.env.NOSKRAP_RELEASE_ARCHIVE;
+          const filename = basename(archive);
+          const match = /^noskrap-(\d+\.\d+\.\d+)\.tgz$/.exec(filename);
+          assert(match, "Unexpected release archive filename");
+          const version = match[1];
+          const integrity = "sha512-" + createHash("sha512").update(readFileSync(archive)).digest("base64");
+          const deadline = Date.now() + 120_000;
+          while (Date.now() < deadline) {
+            try {
+              const response = await fetch(`https://registry.npmjs.org/noskrap/${version}`, {
+                signal: AbortSignal.timeout(5000), headers: { "cache-control": "no-cache" },
+              });
+              if (response.ok) {
+                const metadata = await response.json();
+                assert.equal(metadata.name, "noskrap");
+                assert.equal(metadata.version, version);
+                assert.equal(metadata.dist.integrity, integrity, "Published artifact integrity mismatch");
+                console.log(`Verified public npm package noskrap@${version}`);
+                process.exit(0);
+              }
+              await response.body?.cancel();
+            } catch (error) {
+              if (error instanceof assert.AssertionError) throw error;
+            }
+            await new Promise(resolve => setTimeout(resolve, 5000));
+          }
+          throw new Error("Upload is not publicly available; check npm staged packages and publishing permissions");
+          JS
