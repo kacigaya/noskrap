@@ -1,3 +1,4 @@
+import { withDeadline, validateDeadline } from "./deadline.js";
 import {
   type BotResult,
   type NoSkrapConfig,
@@ -18,22 +19,29 @@ export type NoSkrapObservation = Pick<
 export interface NoSkrapProxyConfig extends NoSkrapConfig {
   // Exact paths only. Keep verification and abuse limits in these handlers.
   recoveryRoutes?: string[];
+  // Resolve routing before scoring so context is bound to the destination.
+  rewrite?: (request: Request) => URL | null;
+  onDecisionTimeoutMs?: number;
   onDecision?: (
     result: NoSkrapObservation,
     request: Request,
+    signal: AbortSignal,
   ) => void | Promise<void>;
 }
 
 export interface NoSkrapTelemetryConfig extends NoSkrapConfig {
+  verificationTimeoutMs?: number;
   verifyTelemetry: (
     request: Request,
     payload: { interacted: boolean },
     rawBody: Uint8Array,
+    signal: AbortSignal,
   ) => boolean | Promise<boolean>;
 }
 
 export interface NoSkrapChallengePassConfig extends NoSkrapConfig {
-  verifyChallenge: (request: Request) => boolean | Promise<boolean>;
+  verificationTimeoutMs?: number;
+  verifyChallenge: (request: Request, signal: AbortSignal) => boolean | Promise<boolean>;
 }
 
 const MAX_TELEMETRY_BYTES = 1024;
@@ -52,10 +60,14 @@ function isTelemetryPayload(value: unknown): value is { interacted: boolean } {
 async function readBodyWithLimit(
   request: Request,
   limit: number,
+  signal: AbortSignal,
 ): Promise<Uint8Array | null> {
   if (!request.body) return new Uint8Array();
 
+  signal.throwIfAborted();
   const reader = request.body.getReader();
+  const cancel = () => { void reader.cancel(signal.reason).catch(() => {}); };
+  signal.addEventListener("abort", cancel, { once: true });
   const chunks: Uint8Array[] = [];
   let size = 0;
 
@@ -65,12 +77,13 @@ async function readBodyWithLimit(
       if (done) break;
       size += value.byteLength;
       if (size > limit) {
-        await reader.cancel();
+        void reader.cancel().catch(() => {});
         return null;
       }
       chunks.push(value);
     }
   } finally {
+    signal.removeEventListener("abort", cancel);
     reader.releaseLock();
   }
 
@@ -93,6 +106,8 @@ export async function getNoSkrapDecision(
 
 export function createNoSkrapProxy(config: NoSkrapProxyConfig) {
   validateConfig(config);
+  validateDeadline(config.onDecisionTimeoutMs, "onDecisionTimeoutMs");
+  if (config.rewrite !== undefined && typeof config.rewrite !== "function") throw new TypeError("rewrite must be a function");
   if (config.recoveryRoutes?.some(path =>
     typeof path !== "string" || !path.startsWith("/") ||
     path.startsWith("//") || /[?#\\]/.test(path)
@@ -109,11 +124,23 @@ export function createNoSkrapProxy(config: NoSkrapProxyConfig) {
       headers.delete(CONTEXT_HEADER);
       return NextResponse.next({ request: { headers } });
     }
-    const decision = await scoreRequest(request, config);
-    if (config.onDecision) {
+    const destination = config.rewrite?.(request);
+    if (destination && (destination.origin !== new URL(request.url).origin || destination.hash)) {
+      throw new TypeError("rewrite must return a same-origin URL without a fragment");
+    }
+    const scoredRequest = destination ? new Request(destination, {
+      method: request.method, headers: request.headers, signal: request.signal,
+    }) : request;
+    // Next.js may run the proxy again after an internal rewrite. Only a
+    // verified rewrite context bound to this destination can skip scoring.
+    const reused = config.rewrite && !destination
+      ? await readContext(scoredRequest, config, true) : null;
+    const decision = reused ?? await scoreRequest(scoredRequest, config);
+    if (config.onDecision && !reused) {
       try {
         const { score, reasons, challengePassed, scoringAvailable } = decision;
-        await config.onDecision(
+        const onDecision = config.onDecision;
+        await withDeadline(signal => onDecision(
           {
             decision: decision.decision,
             score,
@@ -121,8 +148,8 @@ export function createNoSkrapProxy(config: NoSkrapProxyConfig) {
             challengePassed,
             scoringAvailable,
           },
-          request,
-        );
+          request, signal,
+        ), config.onDecisionTimeoutMs ?? 1000, request.signal);
       } catch (error) {
         console.error("NoSkrap onDecision failed", error);
       }
@@ -169,13 +196,15 @@ export function createNoSkrapProxy(config: NoSkrapProxyConfig) {
     }
 
     const headers = new Headers(request.headers);
-    headers.set(CONTEXT_HEADER, await signContext(request, decision, config));
+    headers.set(CONTEXT_HEADER, await signContext(scoredRequest, decision, config, Boolean(destination)));
     const visitorCookie = decision.headers.get("set-cookie")!.split(";")[0];
     const otherCookies = (headers.get("cookie") ?? "").split(";").filter(part =>
       !part.trim().startsWith("noskrap_visitor=") && part.trim()
     );
     headers.set("cookie", [...otherCookies, visitorCookie].join("; "));
-    const response = NextResponse.next({ request: { headers } });
+    const response = destination
+      ? NextResponse.rewrite(destination, { request: { headers } })
+      : NextResponse.next({ request: { headers } });
     copySetCookie(decision.headers, response.headers);
     return response;
   };
@@ -183,6 +212,7 @@ export function createNoSkrapProxy(config: NoSkrapProxyConfig) {
 
 export function createNoSkrapTelemetryHandler(config: NoSkrapTelemetryConfig) {
   validateConfig(config);
+  validateDeadline(config.verificationTimeoutMs, "verificationTimeoutMs");
   if (typeof config.verifyTelemetry !== "function") {
     throw new TypeError("verifyTelemetry must be a function");
   }
@@ -200,7 +230,13 @@ export function createNoSkrapTelemetryHandler(config: NoSkrapTelemetryConfig) {
       return new Response("Payload Too Large", { status: 413 });
     }
 
-    const raw = await readBodyWithLimit(request, MAX_TELEMETRY_BYTES);
+    let raw: Uint8Array | null;
+    try {
+      raw = await withDeadline(signal => readBodyWithLimit(request, MAX_TELEMETRY_BYTES, signal),
+        config.verificationTimeoutMs ?? 5000, request.signal);
+    } catch {
+      return Response.json({ error: "body unavailable" }, { status: 408 });
+    }
     if (raw === null) {
       return new Response("Payload Too Large", { status: 413 });
     }
@@ -216,7 +252,14 @@ export function createNoSkrapTelemetryHandler(config: NoSkrapTelemetryConfig) {
     }
 
     const payload = { interacted: parsed.interacted };
-    if (!(await config.verifyTelemetry(request, payload, raw))) {
+    let verified: boolean;
+    try {
+      verified = await withDeadline(signal => config.verifyTelemetry(request, payload, raw, signal),
+        config.verificationTimeoutMs ?? 5000, request.signal);
+    } catch {
+      return Response.json({ error: "verification unavailable" }, { status: 503 });
+    }
+    if (verified !== true) {
       return Response.json({ error: "unauthorized" }, { status: 401 });
     }
 
@@ -241,6 +284,7 @@ export function createNoSkrapChallengePassHandler(
   config: NoSkrapChallengePassConfig,
 ) {
   validateConfig(config);
+  validateDeadline(config.verificationTimeoutMs, "verificationTimeoutMs");
   if (typeof config.verifyChallenge !== "function") {
     throw new TypeError("verifyChallenge must be a function");
   }
@@ -253,7 +297,14 @@ export function createNoSkrapChallengePassHandler(
         status: 405, headers: { allow: "POST" },
       });
     }
-    if (!(await config.verifyChallenge(request))) {
+    let verified: boolean;
+    try {
+      verified = await withDeadline(signal => config.verifyChallenge(request, signal),
+        config.verificationTimeoutMs ?? 5000, request.signal);
+    } catch {
+      return Response.json({ error: "verification unavailable" }, { status: 503 });
+    }
+    if (verified !== true) {
       return Response.json({ error: "unauthorized" }, { status: 401 });
     }
 
