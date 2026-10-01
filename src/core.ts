@@ -38,6 +38,7 @@ export interface NoSkrapConfig {
   challengePath?: string;
   challengeTtlSeconds?: number;
   storageTimeoutMs?: number;
+  contextTtlMs?: number;
   storageFailureMode?: "open" | "closed";
   getClientIp?: (request: Request) => string | null | undefined;
   storage?: BotStorage;
@@ -528,6 +529,8 @@ export function validateConfig(config: NoSkrapConfig): void {
     throw new TypeError("protectedRoutes must contain absolute URL paths");
   }
   validateDeadline(config.storageTimeoutMs, "storageTimeoutMs");
+  validateDeadline(config.contextTtlMs, "contextTtlMs");
+  if ((config.contextTtlMs ?? 0) > 300_000) throw new TypeError("contextTtlMs must not exceed 300000");
   if (config.storageFailureMode !== undefined && !["open", "closed"].includes(config.storageFailureMode)) {
     throw new TypeError('storageFailureMode must be "open" or "closed"');
   }

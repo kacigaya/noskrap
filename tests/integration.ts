@@ -137,6 +137,24 @@ try {
     const result = await response.json();
     assert.equal(result.reasons.some((reason: { ruleId: string }) => reason.ruleId === "rate.routeBurst"), index > 30, "The proxy and handler must increment once per request");
   }
+  for (const path of ["/alias", "/api/check?delayed=1", "/alias?delayed=1"]) {
+    const first = await fetch(`${base}${path}`, { headers: browser });
+    assert.equal(first.status, 200);
+    const firstResult = await first.json();
+    assert.equal(firstResult.score, 15, `${path}: ${JSON.stringify(firstResult)}
+${await Bun.file(logPath).text()}`);
+    assert.equal(first.headers.get("x-noskrap-context"), null);
+    assert(!Array.from(first.headers.keys()).some(key => key.startsWith("x-middleware-request-")));
+    const contextCookie = first.headers.getSetCookie()[0]!.split(";")[0]!;
+    for (let index = 1; index <= 31; index++) {
+      const response = await fetch(`${base}${path}`, { headers: { ...browser, cookie: contextCookie } });
+      assert.equal(response.status, 200);
+      const result = await response.json();
+      assert.equal(result.visitorId, firstResult.visitorId, "Rewrites and delayed verification must preserve the visitor");
+      assert.equal(result.reasons.some((reason: { ruleId: string }) => reason.ruleId === "rate.routeBurst"), index > 30,
+        "Rewrites and delayed verification must not score twice");
+    }
+  }
   // Use a fresh visitor so the burst signal does not influence challenge checks.
   const fresh = await fetch(`${base}/api/check`, { headers: browser });
   const freshCookie = fresh.headers.getSetCookie()[0]!.split(";")[0]!;

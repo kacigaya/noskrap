@@ -111,6 +111,7 @@ interface NoSkrapConfig {
   challengePath?: string;
   challengeTtlSeconds?: number;
   storageTimeoutMs?: number;
+  contextTtlMs?: number;
   storageFailureMode?: "open" | "closed";
   getClientIp?: (request: Request) => string | null | undefined;
   storage?: BotStorage;
@@ -121,7 +122,8 @@ interface NoSkrapConfig {
 ```
 
 Secrets need at least 32 characters. Proxy configuration also accepts exact
-`recoveryRoutes` and `onDecision(result, request)`. The observation omits visitor
+`recoveryRoutes`, `rewrite(request)`, `onDecisionTimeoutMs` and
+`onDecision(result, request, signal)`. The observation omits visitor
 IDs and cookies and includes `scoringAvailable`.
 
 Storage calls run concurrently and have a 1,000 ms total deadline by default.

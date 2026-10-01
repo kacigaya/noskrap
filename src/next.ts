@@ -19,6 +19,8 @@ export type NoSkrapObservation = Pick<
 export interface NoSkrapProxyConfig extends NoSkrapConfig {
   // Exact paths only. Keep verification and abuse limits in these handlers.
   recoveryRoutes?: string[];
+  // Resolve routing before scoring so context is bound to the destination.
+  rewrite?: (request: Request) => URL | null;
   onDecisionTimeoutMs?: number;
   onDecision?: (
     result: NoSkrapObservation,
@@ -105,6 +107,7 @@ export async function getNoSkrapDecision(
 export function createNoSkrapProxy(config: NoSkrapProxyConfig) {
   validateConfig(config);
   validateDeadline(config.onDecisionTimeoutMs, "onDecisionTimeoutMs");
+  if (config.rewrite !== undefined && typeof config.rewrite !== "function") throw new TypeError("rewrite must be a function");
   if (config.recoveryRoutes?.some(path =>
     typeof path !== "string" || !path.startsWith("/") ||
     path.startsWith("//") || /[?#\\]/.test(path)
@@ -121,8 +124,19 @@ export function createNoSkrapProxy(config: NoSkrapProxyConfig) {
       headers.delete(CONTEXT_HEADER);
       return NextResponse.next({ request: { headers } });
     }
-    const decision = await scoreRequest(request, config);
-    if (config.onDecision) {
+    const destination = config.rewrite?.(request);
+    if (destination && (destination.origin !== new URL(request.url).origin || destination.hash)) {
+      throw new TypeError("rewrite must return a same-origin URL without a fragment");
+    }
+    const scoredRequest = destination ? new Request(destination, {
+      method: request.method, headers: request.headers, signal: request.signal,
+    }) : request;
+    // Next.js may run the proxy again after an internal rewrite. Only a
+    // verified rewrite context bound to this destination can skip scoring.
+    const reused = config.rewrite && !destination
+      ? await readContext(scoredRequest, config, true) : null;
+    const decision = reused ?? await scoreRequest(scoredRequest, config);
+    if (config.onDecision && !reused) {
       try {
         const { score, reasons, challengePassed, scoringAvailable } = decision;
         const onDecision = config.onDecision;
@@ -182,13 +196,15 @@ export function createNoSkrapProxy(config: NoSkrapProxyConfig) {
     }
 
     const headers = new Headers(request.headers);
-    headers.set(CONTEXT_HEADER, await signContext(request, decision, config));
+    headers.set(CONTEXT_HEADER, await signContext(scoredRequest, decision, config, Boolean(destination)));
     const visitorCookie = decision.headers.get("set-cookie")!.split(";")[0];
     const otherCookies = (headers.get("cookie") ?? "").split(";").filter(part =>
       !part.trim().startsWith("noskrap_visitor=") && part.trim()
     );
     headers.set("cookie", [...otherCookies, visitorCookie].join("; "));
-    const response = NextResponse.next({ request: { headers } });
+    const response = destination
+      ? NextResponse.rewrite(destination, { request: { headers } })
+      : NextResponse.next({ request: { headers } });
     copySetCookie(decision.headers, response.headers);
     return response;
   };

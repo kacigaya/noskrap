@@ -13,6 +13,7 @@ interface RequestContext {
   kind: "noskrap-request";
   method: string;
   urlHash: string;
+  rewritten?: true;
   expiresAt: number;
   cookie: string;
   result: Omit<BotResult, "headers" | "visitorId">;
@@ -22,6 +23,7 @@ export async function signContext(
   request: Request,
   result: BotResult,
   config: NoSkrapConfig,
+  rewritten = false,
 ): Promise<string> {
   const { headers, visitorId, ...observation } = result;
   const context: RequestContext = {
@@ -29,7 +31,8 @@ export async function signContext(
     kind: "noskrap-request",
     method: request.method,
     urlHash: await hashUrl(request.url),
-    expiresAt: (config.now?.() ?? Date.now()) + CONTEXT_TTL_MS,
+    ...(rewritten ? { rewritten: true as const } : {}),
+    expiresAt: (config.now?.() ?? Date.now()) + (config.contextTtlMs ?? CONTEXT_TTL_MS),
     cookie: headers.get("set-cookie")!,
     result: observation,
   };
@@ -40,15 +43,19 @@ export async function signContext(
 export async function readContext(
   request: Request,
   config: NoSkrapConfig,
+  requireRewriteDestination = false,
 ): Promise<BotResult | null> {
   const token = request.headers.get(CONTEXT_HEADER);
   if (!token || token.length > 8192) return null;
   const value: unknown = await verifyVisitorToken(token, config.secret);
   if (!isContext(value)) return null;
   const now = config.now?.() ?? Date.now();
+  const urlHash = await hashUrl(request.url);
   if (
-    value.method !== request.method || value.urlHash !== await hashUrl(request.url) ||
-    value.expiresAt <= now || value.expiresAt > now + CONTEXT_TTL_MS
+    (requireRewriteDestination && !value.rewritten) ||
+    value.method !== request.method ||
+    value.urlHash !== urlHash ||
+    value.expiresAt <= now || value.expiresAt > now + (config.contextTtlMs ?? CONTEXT_TTL_MS)
   ) return null;
   const visitorCookie = value.cookie.split(";")[0];
   if (!request.headers.get("cookie")?.split(";").some(part => part.trim() === visitorCookie)) {
@@ -67,6 +74,7 @@ function isContext(value: unknown): value is RequestContext {
   if (
     record.kind !== "noskrap-request" || typeof record.id !== "string" ||
     typeof record.method !== "string" || typeof record.urlHash !== "string" ||
+    (record.rewritten !== undefined && record.rewritten !== true) ||
     typeof record.expiresAt !== "number" || !Number.isFinite(record.expiresAt) ||
     typeof record.cookie !== "string" || !record.cookie.startsWith("noskrap_visitor=") ||
     /[\r\n]/.test(record.cookie) || typeof record.result !== "object" || record.result === null

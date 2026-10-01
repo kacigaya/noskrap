@@ -4,6 +4,7 @@ declare module "next/server" {
       set(name: string, value: string, init?: ResponseCookieInit): void;
     };
     static next(init?: { request?: { headers?: Headers } }): NextResponse;
+    static rewrite(url: URL | string, init?: { request?: { headers?: Headers } }): NextResponse;
     static redirect(url: URL | string, init?: ResponseInit): NextResponse;
   }
 

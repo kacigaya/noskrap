@@ -19,6 +19,14 @@ mock.module("next/server", () => ({
       }
       return new Response(null, { headers });
     },
+    rewrite: (url: URL, init?: { request?: { headers?: Headers } }) => {
+      const headers = new Headers({ "x-middleware-rewrite": url.href });
+      if (init?.request?.headers) {
+        headers.set("x-middleware-override-headers", Array.from(init.request.headers.keys()).join(","));
+        init.request.headers.forEach((value, key) => headers.set(`x-middleware-request-${key}`, value));
+      }
+      return new Response(null, { headers });
+    },
     redirect: (url: URL, init?: ResponseInit) => Response.redirect(url, init?.status ?? 307),
   },
 }));
@@ -528,4 +536,45 @@ test("slow telemetry streams are cancelled before verification", async () => {
     expect(() => createNoSkrapTelemetryHandler({ secret: SECRET, verificationTimeoutMs: value, verifyTelemetry: () => true })).toThrow("verificationTimeoutMs");
     expect(() => createNoSkrapProxy({ secret: SECRET, onDecisionTimeoutMs: value })).toThrow("onDecisionTimeoutMs");
   }
+});
+
+test("rewrites score and bind the destination without a second increment", async () => {
+  let increments = 0;
+  const storage = { getVisitor: async () => null, setVisitor: async () => {},
+    incrementCounter: async () => { increments++; return 1; } };
+  const config = { secret: SECRET, storage, protectedRoutes: ["/api"], getClientIp: () => "trusted" };
+  const request = new Request("https://example.test/public?keep=1", { method: "POST", headers: { host: "example.test" } });
+  let observations = 0;
+  const proxy = createNoSkrapProxy({ ...config, onDecision: () => { observations++; },
+    rewrite: original => new URL(original.url).pathname === "/public"
+      ? new URL(`/api/check${new URL(original.url).search}`, original.url) : null });
+  const response = await proxy(request);
+  expect(response.headers.get("x-middleware-rewrite")).toBe("https://example.test/api/check?keep=1");
+  const forwarded = forwardedRequest(request, response);
+  const rewritten = new Request(response.headers.get("x-middleware-rewrite")!, { method: "POST", headers: forwarded.headers });
+  const secondPass = await proxy(rewritten);
+  const result = await getNoSkrapDecision(forwardedRequest(rewritten, secondPass), config);
+  expect(observations).toBe(1);
+  expect(result.reasons.some(reason => reason.ruleId === "behavior.noRecentInteraction")).toBe(true);
+  expect(increments).toBe(1);
+  const { readContext } = await import("./context");
+  expect(await readContext(forwarded, config)).toBeNull();
+  expect(await readContext(new Request("https://example.test/unrelated", { method: "POST", headers: forwarded.headers }), config)).toBeNull();
+  await expect(createNoSkrapProxy({ ...config, rewrite: () => new URL("https://other.test/api") })(request)).rejects.toThrow("same-origin");
+});
+
+test("configured context lifetime supports delayed handlers and remains bounded", async () => {
+  let now = 1000;
+  let increments = 0;
+  const config = { secret: SECRET, contextTtlMs: 60_000, now: () => now, getClientIp: () => "trusted",
+    storage: { getVisitor: async () => null, setVisitor: async () => {}, incrementCounter: async () => { increments++; return 1; } } };
+  const request = new Request("https://example.test/api/check");
+  const forwarded = forwardedRequest(request, await createNoSkrapProxy(config)(request));
+  now += 31_000;
+  await getNoSkrapDecision(forwarded, config);
+  expect(increments).toBe(1);
+  const { readContext } = await import("./context");
+  now += 29_000;
+  expect(await readContext(forwarded, config)).toBeNull();
+  expect(() => createNoSkrapProxy({ ...config, contextTtlMs: 300_001 })).toThrow("300000");
 });
