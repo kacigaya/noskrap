@@ -2,11 +2,13 @@ import { type BotStorage, type VisitorState, validateVisitorState, validateWindo
 
 // ioredis shape. Other transports use the explicit adapters below.
 export interface RedisLikeClient {
+  withSignal?: (signal: AbortSignal) => RedisLikeClient;
   get(key: string): Promise<unknown>;
   eval(script: string, numberOfKeys: number, ...args: string[]): Promise<unknown>;
 }
 
 export interface NodeRedisClient {
+  withCommandOptions?: (options: { abortSignal: AbortSignal }) => NodeRedisClient;
   get(key: string): Promise<unknown>;
   eval(script: string, options: { keys: string[]; arguments: string[] }): Promise<unknown>;
 }
@@ -18,13 +20,18 @@ export interface UpstashRedisClient {
 
 export function adaptNodeRedis(client: NodeRedisClient): RedisLikeClient {
   return {
+    ...(client.withCommandOptions ? { withSignal: (signal: AbortSignal) => adaptNodeRedis(client.withCommandOptions!({ abortSignal: signal })) } : {}),
     get: key => client.get(key),
     eval: (script, count, ...args) => client.eval(script, { keys: args.slice(0, count), arguments: args.slice(count) }),
   };
 }
 
-export function adaptUpstashRedis(client: UpstashRedisClient): RedisLikeClient {
+export function adaptUpstashRedis(
+  client: UpstashRedisClient,
+  withSignal?: (signal: AbortSignal) => UpstashRedisClient,
+): RedisLikeClient {
   return {
+    ...(withSignal ? { withSignal: (signal: AbortSignal) => adaptUpstashRedis(withSignal(signal)) } : {}),
     get: key => client.get(key),
     eval: (script, count, ...args) => client.eval(script, args.slice(0, count), args.slice(count)),
   };
@@ -68,8 +75,8 @@ export class RedisBotStorage implements BotStorage {
     this.now = options.now ?? Date.now;
   }
 
-  async getVisitor(id: string): Promise<VisitorState | null> {
-    const raw = await this.client.get(this.visitorKey(id));
+  async getVisitor(id: string, signal?: AbortSignal): Promise<VisitorState | null> {
+    const raw = await this.operationClient(signal).get(this.visitorKey(id));
     let value: unknown = raw;
     if (typeof raw === "string") {
       try { value = JSON.parse(raw); } catch { return null; }
@@ -82,18 +89,23 @@ export class RedisBotStorage implements BotStorage {
     return { id, lastSeen: record.lastSeen, ...(typeof interaction === "number" ? { lastInteractionAt: interaction } : {}) };
   }
 
-  async setVisitor(id: string, state: VisitorState, ttlSeconds: number): Promise<void> {
+  async setVisitor(id: string, state: VisitorState, ttlSeconds: number, signal?: AbortSignal): Promise<void> {
     validateVisitorState(id, state, ttlSeconds);
-    const reply = await this.client.eval(MERGE_VISITOR, 1, this.visitorKey(id), JSON.stringify(state), String(ttlSeconds));
+    const reply = await this.operationClient(signal).eval(MERGE_VISITOR, 1, this.visitorKey(id), JSON.stringify(state), String(ttlSeconds));
     if (reply !== "OK") throw new TypeError("redis visitor write returned an invalid acknowledgement");
   }
 
-  async incrementCounter(key: string, windowSeconds: number): Promise<number> {
+  async incrementCounter(key: string, windowSeconds: number, signal?: AbortSignal): Promise<number> {
     validateWindow(windowSeconds);
     const bucket = Math.floor(this.now() / (windowSeconds * 1000));
-    const count = await this.client.eval(INCREMENT_COUNTER, 1, `${this.keyPrefix}counter:${key}:${bucket}`, String(windowSeconds));
+    const count = await this.operationClient(signal).eval(INCREMENT_COUNTER, 1, `${this.keyPrefix}counter:${key}:${bucket}`, String(windowSeconds));
     if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 1) throw new TypeError("redis counter returned an invalid count");
     return count;
+  }
+
+  private operationClient(signal?: AbortSignal): RedisLikeClient {
+    signal?.throwIfAborted();
+    return signal && this.client.withSignal ? this.client.withSignal(signal) : this.client;
   }
 
   private visitorKey(id: string): string {

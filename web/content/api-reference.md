@@ -75,7 +75,11 @@ import { RedisBotStorage } from "noskrap/redis";
 export const noSkrapConfig = {
   secret: process.env.NOSKRAP_SECRET!,
   protectedRoutes: ["/api/search", "/login", "/checkout"],
-  storage: new RedisBotStorage(new Redis(process.env.REDIS_URL!)),
+  storage: new RedisBotStorage(new Redis(process.env.REDIS_URL!, {
+    connectTimeout: 1000, commandTimeout: 1000,
+    enableOfflineQueue: false, maxRetriesPerRequest: 0,
+    retryStrategy: () => null,
+  })),
 };
 ```
 
@@ -128,9 +132,51 @@ explicitly to override. `scoreRequest` reports availability without enforcing
 that policy; direct callers must handle it. Telemetry persistence failures
 return 503 from the supplied handler or throw `BotStorageError` from the core.
 
-The deadline cannot cancel an arbitrary storage client's pending I/O. Configure
-client connection and command timeouts too, to bound resource usage. A timed-out
-operation may still finish and increment a counter or save telemetry.
+Storage methods receive an optional final `AbortSignal`; existing implementations
+remain compatible. Pass it to your transport. A deadline or request disconnect
+aborts the entire storage batch, and a failed operation cancels its siblings.
+`adaptNodeRedis` uses `withCommandOptions({ abortSignal })` when available.
+ioredis lacks per-command cancellation; its connection and command timeouts
+bound waiting and disabling its offline queue prevents delayed queued writes.
+Cancellation cannot undo commands already received by Redis. A timed-out write
+may still commit, even with an abortable client. Never disconnect a shared client
+to cancel one request.
+
+For node-redis, disable offline queueing and bound connection setup:
+
+```ts
+import { createClient } from "redis";
+const client = createClient({
+  url: process.env.REDIS_URL,
+  disableOfflineQueue: true,
+  socket: { connectTimeout: 1000, reconnectStrategy: false },
+});
+client.on("error", error => console.error("Redis connection failed", error.message));
+await client.connect(); // Connect once during application startup.
+const storage = new RedisBotStorage(adaptNodeRedis(client));
+```
+
+Upstash accepts a client factory for operation-specific signals. Reusing one
+aborted signal for every request would permanently break the client:
+
+```ts
+import { Redis } from "@upstash/redis";
+const options = {
+  url: process.env.UPSTASH_REDIS_REST_URL!,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+  retry: false as const,
+  enableAutoPipelining: false,
+};
+const makeClient = (signal?: AbortSignal) => new Redis({
+  ...options, signal: signal ?? (() => AbortSignal.timeout(1000)),
+});
+const storage = new RedisBotStorage(adaptUpstashRedis(makeClient(), makeClient));
+```
+
+The factory creates a lightweight HTTP client per operation and disables retries
+and auto-pipelining so independent deadlines remain isolated. Choose connection
+recovery settings for your deployment; these examples fail promptly during an
+outage rather than reconnecting indefinitely.
 
 ## Results
 
