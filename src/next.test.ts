@@ -469,3 +469,63 @@ test("telemetry verifier receives capped raw bytes and failed writes return 503"
   expect(response.status).toBe(405);
   expect(response.headers.get("allow")).toBe("POST");
 });
+
+test("verification deadlines cancel work without issuing cookies or writes", async () => {
+  let writes = 0;
+  let received: AbortSignal | undefined;
+  const storage = {
+    getVisitor: async () => null,
+    setVisitor: async () => { writes++; },
+    incrementCounter: async () => 1,
+  };
+  const stalled = (signal: AbortSignal) => {
+    received = signal;
+    return new Promise<boolean>(() => {});
+  };
+  const handlers = [
+    createNoSkrapTelemetryHandler({ secret: SECRET, storage, verificationTimeoutMs: 10,
+      verifyTelemetry: (_request, _payload, _raw, signal) => stalled(signal) }),
+    createNoSkrapChallengePassHandler({ secret: SECRET, verificationTimeoutMs: 10,
+      verifyChallenge: (_request, signal) => stalled(signal) }),
+  ];
+  for (const handler of handlers) {
+    const response = await handler(new Request("https://example.test/api/proof", { method: "POST", body: '{"interacted":true}' }));
+    expect(response.status).toBe(503);
+    expect(response.headers.has("set-cookie")).toBe(false);
+    expect(received?.aborted).toBe(true);
+  }
+  expect(writes).toBe(0);
+  const failed = createNoSkrapChallengePassHandler({ secret: SECRET, verifyChallenge: () => { throw new Error("secret provider error"); } });
+  const response = await failed(new Request("https://example.test/", { method: "POST" }));
+  expect(response.status).toBe(503);
+  expect(await response.text()).not.toContain("secret provider error");
+});
+
+test("observer timeout preserves enforcement and cancels stalled logging", async () => {
+  const log = console.error;
+  console.error = () => {};
+  let received: AbortSignal | undefined;
+  try {
+    const proxy = createNoSkrapProxy({ secret: SECRET, mode: "enforce", onDecisionTimeoutMs: 10,
+      thresholds: { observe: 1, challenge: 2, block: 3 },
+      onDecision: (_result, _request, signal) => { received = signal; return new Promise<void>(() => {}); } });
+    expect((await proxy(new Request("https://example.test/", { headers: { "user-agent": "curl" } }))).status).toBe(403);
+    expect(received?.aborted).toBe(true);
+  } finally { console.error = log; }
+});
+
+test("slow telemetry streams are cancelled before verification", async () => {
+  let cancelled = false;
+  let verified = false;
+  const body = new ReadableStream<Uint8Array>({ cancel() { cancelled = true; } });
+  const handler = createNoSkrapTelemetryHandler({ secret: SECRET, verificationTimeoutMs: 10,
+    verifyTelemetry: () => { verified = true; return true; } });
+  const response = await handler(new Request("https://example.test/", { method: "POST", body }));
+  expect(response.status).toBe(408);
+  expect(cancelled).toBe(true);
+  expect(verified).toBe(false);
+  for (const value of [0, NaN, Infinity]) {
+    expect(() => createNoSkrapTelemetryHandler({ secret: SECRET, verificationTimeoutMs: value, verifyTelemetry: () => true })).toThrow("verificationTimeoutMs");
+    expect(() => createNoSkrapProxy({ secret: SECRET, onDecisionTimeoutMs: value })).toThrow("onDecisionTimeoutMs");
+  }
+});

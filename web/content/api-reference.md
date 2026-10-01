@@ -183,3 +183,17 @@ rules: [
   303. Applications must explicitly retry the original operation after recovery.
 - First cookie-less requests no longer allocate visitor records or counters.
 - Protected children now share their route group's counter.
+
+### Callback deadlines and cancellation
+
+`onDecisionTimeoutMs` defaults to 1,000 ms. Observer errors and timeouts are
+logged; enforcement still uses the original decision. `verificationTimeoutMs`
+defaults to 5,000 ms for challenge and telemetry verification. Provider errors,
+timeouts and cancellation return 503 without issuing a pass or recording
+interaction. A verifier must return exactly `true`; rejected proofs return 401.
+Telemetry body reads have the same deadline and return 408 on failure.
+
+Callbacks receive an `AbortSignal` as their final argument. Pass it to `fetch`
+and other cooperative operations. Existing callbacks can omit this argument.
+A timeout cannot stop synchronous blocking code or an operation that ignores
+cancellation; avoid CPU-heavy work and configure provider transport timeouts.
