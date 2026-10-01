@@ -32,13 +32,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "bun test",
-    "check": "bun run build && bun run typecheck:tests && bun test src && bun run test:redis-sdk && bun run test:integration && bun run test:next15 && bun pm pack --dry-run && bun run check:web",
+    "check": "bun run build && bun run typecheck:tests && bun test src && bun run test:redis-sdk && bun run test:integration && bun run test:next15 && bun run test:package && bun run check:web",
     "check:web": "bun run --cwd web lint && bun run --cwd web build",
     "prepack": "bun run build",
     "typecheck:tests": "tsc -p tsconfig.test.json",
     "test:integration": "bun tests/integration.ts",
     "test:next15": "NOSKRAP_TEST_NEXT_MODULES=tests/next15/node_modules bun tests/integration.ts",
-    "test:redis-sdk": "bun tests/redis-sdk.ts"
+    "test:redis-sdk": "bun tests/redis-sdk.ts",
+    "test:package": "bun tests/package.ts"
   },
   "peerDependencies": {
     "next": ">=15"
@@ -54,5 +55,9 @@
     "ioredis": "6.0.0",
     "redis": "6.3.0",
     "typescript": "^5.9.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   }
 }
