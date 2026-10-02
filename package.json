@@ -1,6 +1,6 @@
 {
   "name": "noskrap",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Explainable bot-risk scoring for Next.js applications",
   "license": "MIT",
   "repository": {

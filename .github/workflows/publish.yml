@@ -89,7 +89,7 @@ jobs:
         shell: bash
         run: |
           shopt -s nullglob
-          archives=(package/*.tgz)
+          archives=(./package/*.tgz)
           test "${#archives[@]}" -eq 1
           npm publish "${archives[0]}" --access public --registry=https://registry.npmjs.org
           export NOSKRAP_RELEASE_ARCHIVE="${archives[0]}"
