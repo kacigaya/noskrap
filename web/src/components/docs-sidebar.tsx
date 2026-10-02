@@ -33,7 +33,7 @@ export function DocsSidebar() {
                 className={cn(
                   "rounded-md px-2 py-1.5 transition-colors",
                   active
-                    ? "bg-accent font-medium text-foreground"
+                    ? "bg-accent font-medium text-brand"
                     : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
                 )}
               >

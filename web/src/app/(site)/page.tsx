@@ -1,4 +1,5 @@
 import { SiteFooter } from "@/components/site-footer";
+import { SiteHeader } from "@/components/site-header";
 import Image from "next/image";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -10,7 +11,6 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CodeBlock } from "@/components/code-block";
-import { ThemeToggle } from "@/components/theme-toggle";
 import { asset } from "@/lib/asset";
 
 const DOCS_URL = "/docs";
@@ -65,33 +65,7 @@ const INSTALL = `bun add noskrap`;
 export default function Home() {
   return (
     <>
-      {/* Nav */}
-      <header className="sticky top-0 z-20 px-4 pt-4">
-        <div className="mx-auto flex w-full max-w-6xl items-center justify-between rounded-2xl border bg-background/70 px-5 py-3 shadow-sm backdrop-blur-md">
-          <div className="flex items-center gap-2.5">
-            <Image
-              src={asset("/noskrap-logo.svg")}
-              alt="NoSkrap"
-              width={28}
-              height={28}
-            />
-            <span className="font-semibold tracking-tight">NoSkrap</span>
-          </div>
-          <nav aria-label="Main" className="flex items-center gap-2">
-            <ThemeToggle />
-            <Button variant="ghost" size="sm" render={<Link href={DOCS_URL} />}>
-              Docs
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              render={<a href={GITHUB_URL} />}
-            >
-              GitHub
-            </Button>
-          </nav>
-        </div>
-      </header>
+      <SiteHeader />
 
       <main id="main-content" tabIndex={-1} className="flex flex-1 flex-col">
         {/* Hero */}
@@ -107,10 +81,10 @@ export default function Home() {
           <Badge variant="secondary" className="mb-6">
             Next.js · TypeScript · Bot-risk scoring
           </Badge>
-          <h1 className="font-heading text-5xl font-bold tracking-tight sm:text-6xl">
+          <h1 className="text-balance font-heading text-5xl font-bold tracking-tight sm:text-6xl">
             Protect Next.js routes without guessing who is human
           </h1>
-          <p className="mt-6 max-w-2xl text-lg text-muted-foreground">
+          <p className="mt-6 max-w-2xl text-pretty text-lg text-muted-foreground">
             NoSkrap gives every request an explainable risk score. Start by
             watching traffic, then challenge or block the routes that bots make
             expensive.
@@ -132,15 +106,17 @@ export default function Home() {
 
         {/* Features */}
         <section className="mx-auto w-full max-w-5xl px-6 pb-24">
-          <h2 className="mb-10 text-center font-heading text-3xl font-bold tracking-tight">
+          <h2 className="mb-10 text-balance text-center font-heading text-3xl font-bold tracking-tight">
             Built for the messy middle between allow and block
           </h2>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {FEATURES.map((feature) => (
               <Card key={feature.title}>
                 <CardHeader>
-                  <CardTitle>{feature.title}</CardTitle>
-                  <CardDescription>{feature.description}</CardDescription>
+                  <CardTitle render={<h3 />}>{feature.title}</CardTitle>
+                  <CardDescription render={<p />} className="text-pretty">
+                    {feature.description}
+                  </CardDescription>
                 </CardHeader>
               </Card>
             ))}
@@ -149,10 +125,10 @@ export default function Home() {
 
         {/* Quickstart */}
         <section className="mx-auto w-full max-w-3xl px-6 pb-24">
-          <h2 className="mb-6 text-center font-heading text-3xl font-bold tracking-tight">
+          <h2 className="mb-6 text-balance text-center font-heading text-3xl font-bold tracking-tight">
             Quickstart
           </h2>
-          <p className="mb-4 text-sm text-muted-foreground">
+          <p className="mb-4 text-pretty text-sm text-muted-foreground">
             Next.js 16: proxy.ts with the proxy export. Next.js 15: middleware.ts
             with the middleware export. Use shared storage in production.
           </p>

@@ -14,11 +14,101 @@ export type { NavItem, NavSection } from "@/lib/docs-nav";
 
 const CONTENT_DIR = path.join(process.cwd(), "content");
 
+interface HastNode {
+  type: string;
+  tagName?: string;
+  value?: string;
+  properties?: Record<string, unknown>;
+  children?: HastNode[];
+}
+
+/**
+ * Docs tables are wider than a phone. Wrap every table so it scrolls inside
+ * its own box instead of stretching the page.
+ */
+function rehypeScrollableTables() {
+  return (tree: HastNode) => {
+    const walk = (node: HastNode) => {
+      if (!node.children) return;
+      node.children = node.children.map((child) => {
+        walk(child);
+        if (child.type !== "element" || child.tagName !== "table") return child;
+        return {
+          type: "element",
+          tagName: "div",
+          properties: { className: ["overflow-x-auto"] },
+          children: [child],
+        } satisfies HastNode;
+      });
+    };
+    walk(tree);
+  };
+}
+
+export interface TocItem {
+  id: string;
+  title: string;
+  depth: 2 | 3;
+}
+
+declare module "vfile" {
+  interface DataMap {
+    toc: TocItem[];
+  }
+}
+
+function textOf(node: HastNode): string {
+  if (node.type === "text") return node.value ?? "";
+  return (node.children ?? []).map(textOf).join("");
+}
+
+function containsLink(node: HastNode): boolean {
+  return (node.children ?? []).some(
+    (child) => child.tagName === "a" || containsLink(child),
+  );
+}
+
+/**
+ * Collect h2/h3 for the "On this page" outline and turn each heading into a
+ * link to itself. Runs after rehype-slug so every heading already has an id.
+ */
+function rehypeHeadingLinks() {
+  return (tree: HastNode, file: { data: { toc?: TocItem[] } }) => {
+    const toc: TocItem[] = [];
+    const walk = (node: HastNode) => {
+      for (const child of node.children ?? []) {
+        const depth = child.tagName === "h2" ? 2 : child.tagName === "h3" ? 3 : 0;
+        const id = child.properties?.id;
+        if (child.type !== "element" || !depth || typeof id !== "string") {
+          walk(child);
+          continue;
+        }
+        toc.push({ id, title: textOf(child), depth });
+        // A heading that already holds a link cannot wrap another one.
+        if (!containsLink(child)) {
+          child.children = [
+            {
+              type: "element",
+              tagName: "a",
+              properties: { href: `#${id}`, className: ["heading-anchor"] },
+              children: child.children ?? [],
+            },
+          ];
+        }
+      }
+    };
+    walk(tree);
+    file.data.toc = toc;
+  };
+}
+
 const processor = unified()
   .use(remarkParse)
   .use(remarkGfm)
   .use(remarkRehype)
   .use(rehypeSlug)
+  .use(rehypeHeadingLinks)
+  .use(rehypeScrollableTables)
   .use(rehypePrettyCode, {
     theme: { light: "github-light", dark: "github-dark" },
     keepBackground: false,
@@ -29,6 +119,7 @@ export interface RenderedDoc {
   html: string;
   title: string;
   description: string;
+  toc: TocItem[];
 }
 
 const MAX_DESCRIPTION_LENGTH = 160;
@@ -72,10 +163,11 @@ export async function getDoc(slug: string[]): Promise<RenderedDoc | null> {
 
   const title = raw.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? "NoSkrap Docs";
   const description = extractDescription(raw.replace(/^#\s+.+$/m, ""));
-  let html = String(await processor.process(raw));
+  const file = await processor.process(raw);
+  let html = String(file);
   const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
   if (basePath) {
     html = html.replaceAll('href="/', `href="${basePath}/`);
   }
-  return { html, title, description };
+  return { html, title, description, toc: file.data.toc ?? [] };
 }
