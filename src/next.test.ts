@@ -1,5 +1,5 @@
 import { expect, mock, test } from "bun:test";
-import { MemoryBotStorage } from "./core";
+import { MemoryBotStorage, scoreRequest } from "./core";
 import {
   createNoSkrapChallengePassHandler,
   createNoSkrapProxy,
@@ -415,7 +415,7 @@ test("proxy decision is reused with one counter increment and a stable first coo
   expect(forwarded.headers.get("cookie")).toContain("session=keep");
 });
 
-test("context binds the Host header, not the URL host", async () => {
+test("context binds path, query and a host the proxy saw", async () => {
   const config = { secret: SECRET, storage: new MemoryBotStorage() };
   // Next.js can give the proxy `localhost` while the Host header is the real one.
   const request = new Request("http://localhost:3000/products?page=2", {
@@ -430,6 +430,20 @@ test("context binds the Host header, not the URL host", async () => {
   const otherSite = new Headers(forwarded.headers);
   otherSite.set("host", "tenant-b.example");
   expect(await readContext(new Request("https://tenant-b.example/products?page=2", { headers: otherSite }), config)).toBeNull();
+});
+
+test("context signing uses an explicit Host when the rebuilt request lost it", async () => {
+  const config = { secret: SECRET, storage: new MemoryBotStorage() };
+  const { readContext, signContext } = await import("./context");
+  // Node.js drops Host from `new Request(destination, { headers })`.
+  const rebuilt = new Request("http://localhost:3000/api/check");
+  const decision = await scoreRequest(rebuilt, config);
+  const cookie = decision.headers.get("set-cookie")!.split(";")[0];
+  const token = await signContext(rebuilt, decision, config, true, "127.0.0.1:3000");
+  const handler = new Request("http://localhost:3000/api/check", {
+    headers: { host: "127.0.0.1:3000", cookie, "x-noskrap-context": token },
+  });
+  expect(await readContext(handler, config)).not.toBeNull();
 });
 
 test("contexts reject tampering, changed URL/method/cookie, expiry and wrong secrets", async () => {

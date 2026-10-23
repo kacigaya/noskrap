@@ -196,7 +196,7 @@ export function createNoSkrapProxy(config: NoSkrapProxyConfig) {
     }
 
     const headers = new Headers(request.headers);
-    headers.set(CONTEXT_HEADER, await signContext(scoredRequest, decision, config, Boolean(destination)));
+    headers.set(CONTEXT_HEADER, await signContext(scoredRequest, decision, config, Boolean(destination), request.headers.get("host")));
     const visitorCookie = decision.headers.get("set-cookie")!.split(";")[0];
     const otherCookies = (headers.get("cookie") ?? "").split(";").filter(part =>
       !part.trim().startsWith("noskrap_visitor=") && part.trim()

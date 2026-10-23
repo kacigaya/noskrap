@@ -29,7 +29,7 @@ failure; choose that policy explicitly for endpoints enforcing locally.
 
 When the proxy already scored the request, this helper verifies and reuses its
 signed context instead of incrementing counters again. The context binds the
-`Host` header, URL path and query, method and forwarded visitor cookie, expires after 30 seconds by default,
+URL path and query, the request host, method and forwarded visitor cookie, expires after 30 seconds by default,
 and requires the same secrets in both layers. A handler reached directly scores normally.
 Use the same policy configuration in both layers: the proxy owns the decision
 when its context is valid. Use `scoreRequest` explicitly if you need a different
@@ -67,8 +67,8 @@ trigger fresh scoring; use the integrated resolver to avoid duplicate counts.
 ## Server Components
 
 A Server Component has no `Request`. Build one from `headers()`, with the path
-and query that the proxy saw. The context binds the `Host` header, so the
-scheme and URL host can differ.
+and query that the proxy saw. The context accepts the `Host` header or the
+URL host that the proxy saw, so the scheme can differ.
 
 ```tsx
 // app/products/page.tsx
