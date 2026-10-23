@@ -44,7 +44,9 @@
     "test:next15": "NOSKRAP_TEST_NEXT_MODULES=tests/next15/node_modules bun tests/integration.ts",
     "test:redis-sdk": "bun tests/redis-sdk.ts",
     "test:package": "bun tests/package.ts",
-    "test:node": "rm -rf .test-dist && tsc -p tsconfig.node-tests.json && node --import ./.test-dist/tests/node-setup.js --test .test-dist/src/*.test.js .test-dist/tests/publish.test.js"
+    "test:node": "rm -rf .test-dist && tsc -p tsconfig.node-tests.json && node --import ./.test-dist/tests/node-setup.js --test .test-dist/src/*.test.js .test-dist/tests/publish.test.js",
+    "test:integration:memory": "NOSKRAP_TEST_STORAGE=memory bun tests/integration.ts",
+    "test:next15:memory": "NOSKRAP_TEST_STORAGE=memory NOSKRAP_TEST_NEXT_MODULES=tests/next15/node_modules bun tests/integration.ts"
   },
   "peerDependencies": {
     "next": ">=15"

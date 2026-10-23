@@ -3,22 +3,24 @@ import { cp, mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/prom
 import { createServer } from "node:net";
 import { join, resolve } from "node:path";
 import { RedisClient } from "bun";
+import { MemoryBotStorage, type BotStorage } from "../src/core";
 import { RedisBotStorage } from "../src/redis";
 
 const redisUrl = process.env.NOSKRAP_TEST_REDIS_URL;
-if (!redisUrl) throw new Error("Set NOSKRAP_TEST_REDIS_URL to a disposable Redis 7+ instance before running integration checks.");
+const memoryMode = process.env.NOSKRAP_TEST_STORAGE === "memory";
+if (!redisUrl && !memoryMode) throw new Error("Set NOSKRAP_TEST_REDIS_URL or use NOSKRAP_TEST_STORAGE=memory for integration checks.");
 const root = resolve(import.meta.dir, "..");
 const prefix = `noskrap-test:${crypto.randomUUID()}:`;
-const redis = new RedisClient(redisUrl);
+const redis = redisUrl && !memoryMode ? new RedisClient(redisUrl) : undefined;
 const ownedKeys = new Set<string>();
 let now = Date.now();
-const storage = new RedisBotStorage({
+const storage: BotStorage = redis ? new RedisBotStorage({
   get: key => redis.get(key),
   eval: (script, count, ...args): Promise<unknown> => {
     for (const key of args.slice(0, count)) ownedKeys.add(key);
     return redis.send("EVAL", [script, String(count), ...args]);
   },
-}, { keyPrefix: prefix, now: () => now });
+}, { keyPrefix: prefix, now: () => now }) : new MemoryBotStorage(() => now);
 
 await mkdir(join(root, "test-next-app"), { recursive: true });
 const fixture = await mkdtemp(join(root, "test-next-app", "integration-"));
@@ -26,30 +28,32 @@ let nextProcess: ReturnType<typeof Bun.spawn> | undefined;
 let backend: ReturnType<typeof Bun.serve> | undefined;
 const logPath = join(fixture, "next.log");
 try {
-  await Promise.all(Array.from({ length: 20 }, (_, index) => storage.setVisitor("concurrent", {
-    id: "concurrent", lastSeen: index, lastInteractionAt: index,
-  }, 600)));
-  assert.deepEqual(await storage.getVisitor("concurrent"), { id: "concurrent", lastSeen: 19, lastInteractionAt: 19 });
-  assert(Number(await redis.send("TTL", [`${prefix}visitor:concurrent`])) > 0);
-  const counts = await Promise.all(Array.from({ length: 20 }, () => storage.incrementCounter("burst", 60)));
-  assert.equal(Math.max(...counts), 20);
-  const bucket = Math.floor(now / 60000);
-  const counterKey = `${prefix}counter:burst:${bucket}`;
-  assert(Number(await redis.send("TTL", [counterKey])) > 0);
-  await redis.send("PERSIST", [counterKey]);
-  assert.equal(await storage.incrementCounter("burst", 60), 21);
-  assert(Number(await redis.send("TTL", [counterKey])) > 0);
-  now = (bucket + 1) * 60000;
-  assert.equal(await storage.incrementCounter("burst", 60), 1);
-  now = Date.now();
-  const damagedKey = `${prefix}visitor:damaged`;
-  ownedKeys.add(damagedKey);
-  await redis.send("SET", [damagedKey, "not json"]);
-  assert.equal(await storage.getVisitor("damaged"), null);
-  await storage.setVisitor("damaged", { id: "damaged", lastSeen: now }, 1);
-  await Bun.sleep(1100);
-  assert.equal(await storage.getVisitor("damaged"), null);
-  console.log("Real Redis: atomic merge, concurrent counters, TTL repair, rollover and expiry passed.");
+  if (redis) {
+    await Promise.all(Array.from({ length: 20 }, (_, index) => storage.setVisitor("concurrent", {
+      id: "concurrent", lastSeen: index, lastInteractionAt: index,
+    }, 600)));
+    assert.deepEqual(await storage.getVisitor("concurrent"), { id: "concurrent", lastSeen: 19, lastInteractionAt: 19 });
+    assert(Number(await redis.send("TTL", [`${prefix}visitor:concurrent`])) > 0);
+    const counts = await Promise.all(Array.from({ length: 20 }, () => storage.incrementCounter("burst", 60)));
+    assert.equal(Math.max(...counts), 20);
+    const bucket = Math.floor(now / 60000);
+    const counterKey = `${prefix}counter:60:burst`;
+    assert(Number(await redis.send("TTL", [counterKey])) > 0);
+    await redis.send("PERSIST", [counterKey]);
+    assert.equal(await storage.incrementCounter("burst", 60), 21);
+    assert(Number(await redis.send("TTL", [counterKey])) > 0);
+    now = (bucket + 1) * 60000;
+    assert.equal(await storage.incrementCounter("burst", 60), 22);
+    now = Date.now();
+    const damagedKey = `${prefix}visitor:damaged`;
+    ownedKeys.add(damagedKey);
+    await redis.send("SET", [damagedKey, "not json"]);
+    assert.equal(await storage.getVisitor("damaged"), null);
+    await storage.setVisitor("damaged", { id: "damaged", lastSeen: now }, 1);
+    await Bun.sleep(1100);
+    assert.equal(await storage.getVisitor("damaged"), null);
+    console.log("Real Redis: atomic merge, concurrent counters, TTL repair, rollover and expiry passed.");
+  }
 
   backend = Bun.serve({
     hostname: "127.0.0.1", port: 0,
@@ -121,6 +125,12 @@ try {
     await Bun.sleep(100);
   }
   const browser = { "user-agent": "Mozilla/5.0", "sec-fetch-mode": "cors" };
+  const page = await fetch(`${base}/products?sort=price`, { headers: { ...browser, accept: "text/html", "accept-language": "en" } });
+  assert.equal(page.status, 200, await Bun.file(logPath).text());
+  assert((await page.text()).includes('&quot;score&quot;:15'), "Server Components must reuse the proxy page decision");
+  assert.equal(page.headers.get("x-noskrap-context"), null);
+  assert.equal((await fetch(`${base}/products`, { method: "HEAD", headers: browser })).status, 200,
+    "Server Component page decisions must support HEAD requests");
   const initial = await fetch(`${base}/api/check`, { headers: browser });
   assert.equal(initial.status, 200);
   assert.equal(initial.headers.get("x-noskrap-context"), null);
@@ -183,7 +193,7 @@ ${await Bun.file(logPath).text()}`);
   nextProcess?.kill();
   if (nextProcess) await nextProcess.exited;
   backend?.stop(true);
-  if (ownedKeys.size) await redis.send("DEL", Array.from(ownedKeys));
-  redis.close();
+  if (redis && ownedKeys.size) await redis.send("DEL", Array.from(ownedKeys));
+  redis?.close();
   await rm(fixture, { recursive: true, force: true });
 }
