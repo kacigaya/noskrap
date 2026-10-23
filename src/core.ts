@@ -404,7 +404,7 @@ export class MemoryBotStorage implements BotStorage {
     string,
     { value: VisitorState; expiresAt: number }
   >();
-  private counters = new Map<string, { value: number; expiresAt: number }>();
+  private counters = new Map<string, { value: number; previous: number; bucket: number; expiresAt: number }>();
 
   constructor(
     private readonly now: () => number = Date.now,
@@ -446,17 +446,18 @@ export class MemoryBotStorage implements BotStorage {
 
   async incrementCounter(key: string, windowSeconds: number): Promise<number> {
     validateWindow(windowSeconds);
+    key = `${windowSeconds}:${key}`;
+    const now = this.now();
+    const duration = windowSeconds * 1000;
     const existing = this.counters.get(key);
-    if (!existing || existing.expiresAt <= this.now()) {
-      this.makeRoom(this.counters, key);
-      this.counters.set(key, {
-        value: 1,
-        expiresAt: this.now() + windowSeconds * 1000,
-      });
-      return 1;
-    }
-    existing.value += 1;
-    return existing.value;
+    const bucket = Math.max(Math.floor(now / duration), existing?.bucket ?? -Infinity);
+    const previous = existing && existing.expiresAt > now
+      ? bucket === existing.bucket ? existing.previous : bucket === existing.bucket + 1 ? existing.value : 0
+      : 0;
+    const value = existing && bucket === existing.bucket && existing.expiresAt > now ? existing.value + 1 : 1;
+    this.makeRoom(this.counters, key);
+    this.counters.set(key, { value, previous, bucket, expiresAt: Math.max(existing?.expiresAt ?? 0, now + duration * 2) });
+    return value + previous * Math.min(1, 1 - (now - bucket * duration) / duration);
   }
 
   private makeRoom<T extends { expiresAt: number }>(

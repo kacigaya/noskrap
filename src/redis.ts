@@ -58,9 +58,20 @@ return redis.call('SET', KEYS[1], cjson.encode(next), 'EX', ARGV[2])
 `;
 
 const INCREMENT_COUNTER = `
-local count = redis.call('INCR', KEYS[1])
-if redis.call('TTL', KEYS[1]) < 0 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
-return count
+local old = redis.call('HMGET', KEYS[1], 'bucket', 'current', 'previous')
+local bucket = tonumber(ARGV[1])
+local weight = tonumber(ARGV[2])
+local current, previous = 1, 0
+if old[1] then
+  local prior = tonumber(old[1])
+  if prior > bucket then bucket, weight = prior, 1 end
+  if prior == bucket then
+    current, previous = tonumber(old[2]) + 1, tonumber(old[3])
+  elseif prior == bucket - 1 then previous = tonumber(old[2]) end
+end
+redis.call('HSET', KEYS[1], 'bucket', bucket, 'current', current, 'previous', previous)
+redis.call('EXPIRE', KEYS[1], ARGV[3])
+return tostring(current + previous * weight)
 `;
 
 export class RedisBotStorage implements BotStorage {
@@ -97,9 +108,13 @@ export class RedisBotStorage implements BotStorage {
 
   async incrementCounter(key: string, windowSeconds: number, signal?: AbortSignal): Promise<number> {
     validateWindow(windowSeconds);
-    const bucket = Math.floor(this.now() / (windowSeconds * 1000));
-    const count = await this.operationClient(signal).eval(INCREMENT_COUNTER, 1, `${this.keyPrefix}counter:${key}:${bucket}`, String(windowSeconds));
-    if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 1) throw new TypeError("redis counter returned an invalid count");
+    const duration = windowSeconds * 1000;
+    const now = this.now();
+    const bucket = Math.floor(now / duration);
+    const reply = await this.operationClient(signal).eval(INCREMENT_COUNTER, 1,
+      `${this.keyPrefix}counter:${windowSeconds}:${key}`, String(bucket), String(1 - (now % duration) / duration), String(windowSeconds * 2));
+    const count = typeof reply === "string" && /^\d+(?:\.\d+)?(?:e[+-]?\d+)?$/i.test(reply) ? Number(reply) : reply;
+    if (typeof count !== "number" || !Number.isFinite(count) || count < 1 || count > Number.MAX_SAFE_INTEGER) throw new TypeError("redis counter returned an invalid count");
     return count;
   }
 
