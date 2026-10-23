@@ -201,9 +201,26 @@ interface TelemetryResult {
 ## Scoring
 
 Default bands are 0–29 allow, 30–59 observe, 60–84 challenge and 85–100 block.
-Signals cover missing HTML browser headers, automation user agents, Client
-Hints mismatch, weak fetch metadata, missing signed cookie continuity, protected
-writes without recent interaction, and bursts per visitor or trusted IP.
+
+| Rule | Score | Signal |
+| --- | --- | --- |
+| `headers.missingBrowserHeaders` | 25 | HTML navigation without `user-agent`, `accept` or `accept-language`. |
+| `browser.automationUa` | 30 | User agent of a headless browser or HTTP library, such as `HeadlessChrome`, `curl`, `python-httpx`, `Go-http-client`, `node`, `axios` or `Scrapy`. |
+| `headers.missingFetchMetadata` | 25 | User agent claims Chromium 89+, Firefox 90+ or Safari 16.4+, but the request has no `sec-fetch-mode`. |
+| `headers.missingClientHints` | 15 | User agent claims Chromium 89+, but the request has no `sec-ch-ua`. |
+| `headers.uaClientHintsMismatch` | 15 | Mobile user agent and `sec-ch-ua-platform` disagree. |
+| `headers.badFetchMetadata` | 20 | Protected write without `sec-fetch-mode`, or with `sec-fetch-site: none`. |
+| `behavior.noCookieContinuity` | 15 | Protected request without a valid visitor cookie. |
+| `behavior.noRecentInteraction` | 30 | Protected write without telemetry in the last 10 minutes. |
+| `rate.routeBurst` | 35 | More than 60 requests per trusted IP or 30 per visitor in one window. |
+| `rate.heavyBurst` | 30 | Three times the `rate.routeBurst` limits. Adds to it, so a heavy burst alone reaches the challenge band. |
+
+Browsers send fetch metadata and Client Hints only to HTTPS and localhost
+origins. The two `missing*` header rules run only when the request URL is
+HTTPS or localhost. Declared crawlers, such as search engine bots, can match
+`headers.missingFetchMetadata`. Disable or rescore the rule if you must keep
+their score low. Disabling `rate.routeBurst` also stops `rate.heavyBurst`,
+because no counters are kept.
 
 Children share the longest matching protected-route bucket; unprotected paths
 share `*`. `/` matches every path. Trailing slashes are ignored, while sibling

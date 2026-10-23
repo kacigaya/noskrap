@@ -141,6 +141,7 @@ describe("scoring", () => {
         headers: {
           accept: "text/html",
           "accept-language": "en-US,en;q=0.9",
+          "sec-ch-ua": '"Chromium";v="120", "Google Chrome";v="120"',
           "sec-fetch-mode": "navigate",
           "user-agent": "Mozilla/5.0 Chrome/120 Safari/537.36",
         },
@@ -150,6 +151,61 @@ describe("scoring", () => {
 
     expect(result.decision).toBe("allow");
     expect(result.score).toBe(0);
+  });
+
+  test("flags HTTP libraries as automation", async () => {
+    const config = { secret: SECRET, storage: new MemoryBotStorage(() => 1000) };
+    for (const userAgent of ["python-httpx/0.27", "Go-http-client/1.1", "node", "axios/1.7.2", "Scrapy/2.11", "okhttp/4.12"]) {
+      const result = await scoreRequest(new Request("https://example.test/", { headers: { "user-agent": userAgent } }), config);
+      expect(result.reasons.map(reason => reason.ruleId)).toContain("browser.automationUa");
+    }
+    const browser = await scoreRequest(new Request("https://example.test/", {
+      headers: { "user-agent": "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0",
+        accept: "text/html", "accept-language": "en", "sec-fetch-mode": "navigate" },
+    }), config);
+    expect(browser.reasons).toEqual([]);
+  });
+
+  test("flags a modern browser user agent without browser headers", async () => {
+    const config = { secret: SECRET, storage: new MemoryBotStorage(() => 1000) };
+    const chrome = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
+    const ids = async (url: string, headers: Record<string, string>) =>
+      (await scoreRequest(new Request(url, { headers }), config)).reasons.map(reason => reason.ruleId);
+
+    expect(await ids("https://example.test/", { "user-agent": chrome, accept: "*/*" }))
+      .toEqual(["headers.missingFetchMetadata", "headers.missingClientHints"]);
+    expect(await ids("https://example.test/", {
+      "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+    })).toEqual(["headers.missingFetchMetadata"]);
+    // Older browsers and plain HTTP origins cannot send these headers.
+    expect(await ids("https://example.test/", { "user-agent": "Mozilla/5.0 Chrome/70.0 Safari/537.36" })).toEqual([]);
+    expect(await ids("https://example.test/", {
+      "user-agent": "Mozilla/5.0 (Macintosh) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.3 Safari/605.1.15",
+    })).toEqual([]);
+    expect(await ids("http://example.test/", { "user-agent": chrome })).toEqual([]);
+    for (const origin of ["http://localhost:3000/", "http://app.localhost/", "http://127.0.0.2/"]) {
+      expect(await ids(origin, { "user-agent": chrome }))
+        .toEqual(["headers.missingFetchMetadata", "headers.missingClientHints"]);
+    }
+  });
+
+  test("escalates a heavy burst into the challenge band", async () => {
+    const storage = new MemoryBotStorage(() => 1000);
+    const config = { secret: SECRET, storage, getClientIp: () => "203.0.113.9" };
+    const scores: number[] = [];
+    for (let index = 0; index < 181; index += 1) {
+      scores.push((await scoreRequest(new Request("https://example.test/search"), config)).score);
+    }
+    expect(scores[59]).toBe(0);
+    expect(scores[60]).toBe(35);
+    expect(scores[179]).toBe(35);
+    expect(scores[180]).toBe(65);
+    expect(decisionForScore(scores[180])).toBe("challenge");
+
+    const disabled = await scoreRequest(new Request("https://example.test/search"), {
+      ...config, rules: [{ id: "rate.heavyBurst", enabled: false }],
+    });
+    expect(disabled.reasons.map(reason => reason.ruleId)).toEqual(["rate.routeBurst"]);
   });
 
   test("adds route burst reason after repeated requests", async () => {
