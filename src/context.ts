@@ -13,6 +13,7 @@ interface RequestContext {
   kind: "noskrap-request";
   method: string;
   urlHash: string;
+  hosts: string[];
   rewritten?: true;
   expiresAt: number;
   cookie: string;
@@ -24,6 +25,9 @@ export async function signContext(
   result: BotResult,
   config: NoSkrapConfig,
   rewritten = false,
+  // Node.js drops the forbidden Host header when a Request is rebuilt for a
+  // rewrite, so the proxy passes the original value.
+  host = request.headers.get("host"),
 ): Promise<string> {
   const { headers, visitorId, ...observation } = result;
   const context: RequestContext = {
@@ -31,6 +35,7 @@ export async function signContext(
     kind: "noskrap-request",
     method: request.method,
     urlHash: await hashUrl(request.url),
+    hosts: requestHosts(request.url, host),
     ...(rewritten ? { rewritten: true as const } : {}),
     expiresAt: (config.now?.() ?? Date.now()) + (config.contextTtlMs ?? CONTEXT_TTL_MS),
     cookie: headers.get("set-cookie")!,
@@ -55,6 +60,7 @@ export async function readContext(
     (requireRewriteDestination && !value.rewritten) ||
     value.method !== request.method ||
     value.urlHash !== urlHash ||
+    !requestHosts(request.url, request.headers.get("host")).some(host => value.hosts.includes(host)) ||
     value.expiresAt <= now || value.expiresAt > now + (config.contextTtlMs ?? CONTEXT_TTL_MS)
   ) return null;
   const visitorCookie = value.cookie.split(";")[0];
@@ -74,6 +80,8 @@ function isContext(value: unknown): value is RequestContext {
   if (
     record.kind !== "noskrap-request" || typeof record.id !== "string" ||
     typeof record.method !== "string" || typeof record.urlHash !== "string" ||
+    !Array.isArray(record.hosts) || record.hosts.length === 0 ||
+    !record.hosts.every(host => typeof host === "string") ||
     (record.rewritten !== undefined && record.rewritten !== true) ||
     typeof record.expiresAt !== "number" || !Number.isFinite(record.expiresAt) ||
     typeof record.cookie !== "string" || !record.cookie.startsWith("noskrap_visitor=") ||
@@ -95,7 +103,18 @@ function isReason(value: unknown): boolean {
     Number.isFinite(reason.score) && reason.score >= 0;
 }
 
-async function hashUrl(url: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(url));
+// No single host is stable: Next.js gives the proxy a `localhost` URL with the
+// real Host header, rewrites Host to the internal host before the destination
+// runs, and Server Components see only the Host header. A context therefore
+// records both hosts of the scored request, and a reader must share one.
+function requestHosts(requestUrl: string, host: string | null): string[] {
+  const urlHost = new URL(requestUrl).host;
+  return [...new Set([host, urlHost].filter((value): value is string => Boolean(value))
+    .map(value => value.toLowerCase()))];
+}
+
+async function hashUrl(requestUrl: string): Promise<string> {
+  const { pathname, search } = new URL(requestUrl);
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(pathname + search));
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
 }

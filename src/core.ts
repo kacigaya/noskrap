@@ -87,6 +87,9 @@ const IP_BURST_LIMIT = 60;
 const VISITOR_BURST_LIMIT = 30;
 // A heavy burst alone must reach the default challenge band (35 + 30 = 65).
 const HEAVY_BURST_FACTOR = 3;
+// New visitors per trusted IP per window. Shared NATs see many first visits,
+// so the limit stays well above what one household or office produces.
+const NEW_VISITOR_LIMIT = 20;
 // HTTP libraries and automation tools. Declared crawlers are not listed so
 // search engines keep their reputation; score them with your own rules.
 const AUTOMATION_UA = new RegExp([
@@ -98,6 +101,11 @@ const AUTOMATION_UA = new RegExp([
 ].join("|"), "i");
 const INTERACTION_TTL_MS = 10 * 60 * 1000;
 const MIN_SECRET_LENGTH = 32;
+// Layouts stay mounted across client navigation, so a beacon can hold its
+// token for hours. The token is visitor-bound and a scraper can fetch a fresh
+// one from any page, so a short lifetime would only break long sessions.
+const TELEMETRY_TOKEN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+export const TELEMETRY_TOKEN_HEADER = "x-noskrap-telemetry";
 let defaultMemoryStorage: MemoryBotStorage | undefined;
 let warnedAboutDefaultStorage = false;
 
@@ -111,7 +119,7 @@ export async function scoreRequest(
   const thresholds = config.thresholds ?? DEFAULT_THRESHOLDS;
   const token = getCookie(request, VISITOR_COOKIE);
   const tokenPayload = token
-    ? await verifyVisitorToken(token, config.secret)
+    ? await verifyVisitorCookie(token, config.secret)
     : null;
   const visitorId = tokenPayload?.id ?? createId();
 
@@ -150,8 +158,11 @@ export async function scoreRequest(
     if (browser && !secFetchMode) {
       addReason("headers.missingFetchMetadata", 25);
     }
-    if (browser === "chromium" && !headers.has("sec-ch-ua")) {
+    const brands = headers.get("sec-ch-ua");
+    if (browser === "chromium" && brands === null && sendsClientHints(request, userAgent)) {
       addReason("headers.missingClientHints", 15);
+    } else if (browser === "chromium" && brands !== null && !hasVendorBrand(brands)) {
+      addReason("headers.unbrandedChromium", 10);
     }
   }
 
@@ -171,7 +182,9 @@ export async function scoreRequest(
     addReason("headers.badFetchMetadata", 20);
   }
 
-  if (!tokenPayload && isProtected) {
+  // CORS preflights never carry cookies, so they say nothing about continuity.
+  const preflight = isPreflight(request);
+  if (!tokenPayload && isProtected && !preflight) {
     addReason("behavior.noCookieContinuity", 15);
   }
 
@@ -179,17 +192,23 @@ export async function scoreRequest(
   // counting altogether.
   const rateEnabled = ruleScore(config, "rate.routeBurst", 35) > 0;
   const interactionEnabled = ruleScore(config, "behavior.noRecentInteraction", 30) > 0;
-  const ip = rateEnabled ? config.getClientIp?.(request)?.trim() : undefined;
+  const churnEnabled = ruleScore(config, "behavior.cookieChurn", 20) > 0;
+  const countNewVisitor = churnEnabled && !tokenPayload && !preflight;
+  const ip = rateEnabled || countNewVisitor
+    ? config.getClientIp?.(request)?.trim() : undefined;
   const routeKey = protectedRoute ?? "*";
   let scoringAvailable = true;
   try {
-    const [existing, ipCount, visitorCount] = await storageOperation(
+    const [existing, ipCount, visitorCount, newVisitorCount] = await storageOperation(
       signal => Promise.all([
         interactionEnabled && tokenPayload && isProtected && isUnsafeMethod(request.method)
           ? storage.getVisitor(visitorId, signal)
           : Promise.resolve(null),
-        ip ? storage.incrementCounter(`ip:${ip}:${routeKey}`, RATE_WINDOW_SECONDS, signal) : Promise.resolve(0),
+        rateEnabled && ip ? storage.incrementCounter(`ip:${ip}:${routeKey}`, RATE_WINDOW_SECONDS, signal) : Promise.resolve(0),
         rateEnabled && tokenPayload ? storage.incrementCounter(`visitor:${visitorId}:${routeKey}`, RATE_WINDOW_SECONDS, signal) : Promise.resolve(0),
+        // A client that drops its cookie restarts the per-visitor counter, so
+        // count fresh visitor IDs per IP across all routes instead.
+        countNewVisitor && ip ? storage.incrementCounter(`new:${ip}`, RATE_WINDOW_SECONDS, signal) : Promise.resolve(0),
       ]),
       config, request.signal,
     );
@@ -210,6 +229,7 @@ export async function scoreRequest(
     ) {
       addReason("rate.heavyBurst", 30);
     }
+    if (newVisitorCount > NEW_VISITOR_LIMIT) addReason("behavior.cookieChurn", 20);
   } catch (error) {
     if (!(error instanceof BotStorageError)) throw error;
     scoringAvailable = false;
@@ -243,7 +263,7 @@ export async function recordTelemetry(
   validateConfig(config);
   if (typeof payload.interacted !== "boolean") throw new TypeError("interacted must be a boolean");
   const token = getCookie(request, VISITOR_COOKIE);
-  const visitor = token ? await verifyVisitorToken(token, config.secret) : null;
+  const visitor = token ? await verifyVisitorCookie(token, config.secret) : null;
   const visitorId = visitor?.id ?? createId();
   const now = config.now?.() ?? Date.now();
   const storage = config.storage ?? getDefaultStorage();
@@ -277,7 +297,7 @@ export async function createChallengePassHeaders(
   validateConfig(config);
   const visitorToken = getCookie(request, VISITOR_COOKIE);
   const visitor = visitorToken
-    ? await verifyVisitorToken(visitorToken, config.secret)
+    ? await verifyVisitorCookie(visitorToken, config.secret)
     : null;
   if (!visitor) return null;
 
@@ -308,7 +328,7 @@ export async function verifyChallengePass(
   const challengeToken = getCookie(request, CHALLENGE_COOKIE);
   if (!visitorToken || !challengeToken) return false;
 
-  const visitor = await verifyVisitorToken(visitorToken, config.secret);
+  const visitor = await verifyVisitorCookie(visitorToken, config.secret);
   const challenge = await verifyChallengePassToken(challengeToken, config.secret);
   const now = config.now?.() ?? Date.now();
 
@@ -318,6 +338,64 @@ export async function verifyChallengePass(
       challenge.id === visitor.id &&
       challenge.expiresAt > now,
   );
+}
+
+export interface TelemetryTokenOptions {
+  // Reject tokens younger than this. Defaults to 0: real visitors can click
+  // within a second, and a scraper can wait out any minimum.
+  minAgeMs?: number;
+  // Defaults to 24 hours.
+  maxAgeMs?: number;
+}
+
+interface TelemetryToken {
+  id: string;
+  kind: "noskrap-telemetry";
+  issuedAt: number;
+}
+
+// Issue while rendering the page. Returns null without a valid visitor cookie;
+// behind the NoSkrap proxy, first visits already carry the new cookie.
+export async function createTelemetryToken(
+  request: Request,
+  config: NoSkrapConfig,
+): Promise<string | null> {
+  validateConfig(config);
+  const visitorToken = getCookie(request, VISITOR_COOKIE);
+  const visitor = visitorToken ? await verifyVisitorCookie(visitorToken, config.secret) : null;
+  if (!visitor) return null;
+  const token: TelemetryToken = {
+    id: visitor.id,
+    kind: "noskrap-telemetry",
+    issuedAt: config.now?.() ?? Date.now(),
+  };
+  return signVisitorToken(token, firstSecret(config.secret));
+}
+
+// Checks the `x-noskrap-telemetry` header against the visitor cookie. This
+// proves the visitor loaded a page you rendered, not that a human used it.
+export async function verifyTelemetryToken(
+  request: Request,
+  config: NoSkrapConfig,
+  options: TelemetryTokenOptions = {},
+): Promise<boolean> {
+  validateConfig(config);
+  const minAgeMs = options.minAgeMs ?? 0;
+  const maxAgeMs = options.maxAgeMs ?? TELEMETRY_TOKEN_MAX_AGE_MS;
+  if (!(minAgeMs >= 0 && maxAgeMs > minAgeMs && Number.isFinite(maxAgeMs))) {
+    throw new TypeError("telemetry token ages must satisfy 0 <= minAgeMs < maxAgeMs");
+  }
+  const token = request.headers.get(TELEMETRY_TOKEN_HEADER);
+  const visitorToken = getCookie(request, VISITOR_COOKIE);
+  if (!token || token.length > 1024 || !visitorToken) return false;
+  const [payload, visitor] = await Promise.all([
+    verifyVisitorToken(token, config.secret) as Promise<Partial<TelemetryToken> | null>,
+    verifyVisitorCookie(visitorToken, config.secret),
+  ]);
+  if (!payload || !visitor || payload.kind !== "noskrap-telemetry" ||
+    payload.id !== visitor.id || typeof payload.issuedAt !== "number") return false;
+  const age = (config.now?.() ?? Date.now()) - payload.issuedAt;
+  return age >= minAgeMs && age < maxAgeMs;
 }
 
 export class MemoryBotStorage implements BotStorage {
@@ -466,6 +544,16 @@ export async function verifyVisitorToken(
   return null;
 }
 
+// The same signer issues visitor cookies, request contexts and telemetry
+// tokens. Only a plain visitor payload, without a `kind`, is a visitor cookie.
+async function verifyVisitorCookie(
+  token: string,
+  secrets: string | string[],
+): Promise<{ id: string } | null> {
+  const payload = await verifyVisitorToken(token, secrets);
+  return payload && !("kind" in payload) ? payload : null;
+}
+
 async function signChallengePassToken(
   payload: { id: string; expiresAt: number },
   secret: string,
@@ -514,7 +602,20 @@ function isHtmlNavigation(request: Request): boolean {
 function isTrustworthyOrigin(url: URL): boolean {
   const host = url.hostname;
   return url.protocol === "https:" || host === "localhost" ||
-    host.endsWith(".localhost") || host === "[::1]" || /^127\./.test(host);
+    host.endsWith(".localhost") || host === "[::1]" ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+}
+
+function isPreflight(request: Request): boolean {
+  return request.method === "OPTIONS" && request.headers.has("access-control-request-method");
+}
+
+// CORS preflights never carry Client Hints, and Android WebView added them in
+// version 116. Both still send Sec-Fetch-*, so only this check is skipped.
+function sendsClientHints(request: Request, userAgent: string): boolean {
+  if (isPreflight(request)) return false;
+  const webView = /; wv\).*Chrome\/(\d+)/.exec(userAgent);
+  return !webView || Number(webView[1]) >= 116;
 }
 
 // Versions that send Sec-Fetch-* (Chromium 80, Firefox 90, Safari 16.4) and,
@@ -532,6 +633,14 @@ function claimedBrowser(userAgent: string): "chromium" | "firefox" | "safari" | 
     return major > 16 || (major === 16 && minor >= 4) ? "safari" : null;
   }
   return null;
+}
+
+// Branded Chromium builds (Chrome, Edge, Opera, Brave, Samsung Internet)
+// name themselves in Sec-CH-UA. Bare Chromium and automation builds list only
+// "Chromium" and a GREASE brand such as "Not_A Brand".
+function hasVendorBrand(header: string): boolean {
+  return [...header.matchAll(/"([^"]*)"\s*;\s*v=/g)].some(([, brand]) =>
+    brand !== "Chromium" && !/^Not.?A.?Brand$/i.test(brand));
 }
 
 function isUnsafeMethod(method: string): boolean {
