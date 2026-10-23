@@ -39,7 +39,10 @@ NoSkrap exports four entrypoints.
 
 ## `noskrap/client`
 
-`showBotDetectedPopup(result, options?)` shows a popup for configured decisions.
+| API | Description |
+| --- | --- |
+| `showBotDetectedPopup(result, options?)` | Shows a popup for configured decisions. |
+| `startNoSkrapBeacon({ token, endpoint? })` | Sends signed interaction telemetry at most every five minutes. Returns a cleanup function. |
 
 ## Storage
 
