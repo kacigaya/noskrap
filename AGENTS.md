@@ -5,7 +5,7 @@
 - Full gate: `NOSKRAP_TEST_REDIS_URL=redis://127.0.0.1:6379 bun run check`. This includes package build, test type-checking, unit tests, real Redis SDKs and production Next.js 15/16 integration, package contents, docs lint and static export.
 - Integration needs a disposable Redis 7+ service and Node.js for the fixture's Next.js production runtime. CI provides Redis 7.4 on port 6379. Tests delete only their own randomly prefixed keys, never flush the database.
 - Focused checks: `bun test src tests/publish.test.ts`, `bun run typecheck:tests`, `bun run test:redis-sdk`, `bun run test:integration`, `bun run test:next15`, `bun run test:package`, `bun run check:web`.
-- Dependency gates: `bun audit --audit-level=high` in the root, `web/`, and `tests/next15/`.
+- Dependency gates: `bun audit --audit-level=high` in the root, `web/`, and `tests/next15/`. In `web/`, add `--ignore GHSA-vfj7-8cjw-p6xm` (braces, no patched release, docs lint only) until a fix ships.
 - Docs development: `bun run --cwd web dev` (Next.js default port 3000); no production application service runs in this repository.
 - Docs are a Next.js 16 static export in `web/out/`. Preview with `python3 -m http.server 8080 --directory web/out` after building. `next start` does not serve this export.
 - GitHub Pages workflow builds with `NEXT_PUBLIC_BASE_PATH=/noskrap`, audits and lints before deployment. Production origin defaults to `https://kacigaya.github.io/noskrap`; override with `NEXT_PUBLIC_SITE_URL`.
