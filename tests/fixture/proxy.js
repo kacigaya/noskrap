@@ -1,6 +1,6 @@
 import { createNoSkrapProxy } from "noskrap/next";
 import { config as shared } from "./shared.js";
-export const config = { matcher: ["/api/:path*", "/alias", "/bot-check"] };
+export const config = { matcher: ["/api/:path*", "/alias", "/bot-check", "/products"] };
 export const proxy = createNoSkrapProxy({
   ...shared, mode: "enforce", challengePath: "/bot-check",
   rewrite: request => {

@@ -1,4 +1,5 @@
 import { NextResponse } from "../tests/next-server.js";
+import { headers, setRequestHeaders } from "../tests/next-headers.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { MemoryBotStorage, scoreRequest } from "./core.js";
@@ -7,6 +8,7 @@ import {
   createNoSkrapProxy,
   createNoSkrapTelemetryHandler,
   getNoSkrapDecision,
+  getNoSkrapPageDecision,
 } from "./next.js";
 
 const SECRET = "test-secret-with-at-least-32-bytes";
@@ -14,7 +16,55 @@ const SECRET = "test-secret-with-at-least-32-bytes";
 if (process.versions.bun) {
   const { mock } = await import("bun:test");
   mock.module("next/server", () => ({ NextResponse }));
+  mock.module("next/headers", () => ({ headers }));
 }
+
+test("page helper reuses the signed page decision without rebuilding a Request or scoring twice", async () => {
+  let increments = 0;
+  let now = 1000;
+  const storage = { getVisitor: async () => null, setVisitor: async () => {},
+    incrementCounter: async () => { increments++; return 1; } };
+  const config = { secret: SECRET, storage, now: () => now, protectedRoutes: ["/products"], getClientIp: () => "trusted" };
+  const request = new Request("http://localhost:3000/products?sort=price", { headers: {
+    host: "app.example", accept: "text/html", "user-agent": "Mozilla/5.0", "accept-language": "en",
+  } });
+  const forwarded = forwardedRequest(request, await createNoSkrapProxy(config)(request));
+  forwarded.headers.set("host", "app.example");
+  setRequestHeaders(forwarded.headers);
+  assert.equal((await getNoSkrapPageDecision("/products", config)).score, 15);
+  assert.equal((await getNoSkrapPageDecision("/products", config)).score, 15);
+  assert.equal(increments, 2);
+  for (const path of ["/other", "/products?sort=price", "//other.test/products", "/products/../other"]) {
+    await assert.rejects(getNoSkrapPageDecision(path, config));
+  }
+  const otherHost = new Headers(forwarded.headers);
+  otherHost.set("host", "other.example");
+  setRequestHeaders(otherHost);
+  await assert.rejects(getNoSkrapPageDecision("/products", config), /proxy context/);
+  setRequestHeaders(forwarded.headers);
+  now += 30001;
+  await assert.rejects(getNoSkrapPageDecision("/products", config), /proxy context/);
+  setRequestHeaders(new Headers());
+  await assert.rejects(getNoSkrapPageDecision("/products", config), /proxy context/);
+  assert.equal(increments, 2);
+});
+
+test("page helper accepts HEAD pages and rejects changed cookies and unsafe methods", async () => {
+  const config = { secret: SECRET, storage: new MemoryBotStorage() };
+  for (const method of ["HEAD", "POST"]) {
+    const request = new Request("https://example.test/products", { method, headers: { host: "example.test" } });
+    const forwarded = forwardedRequest(request, await createNoSkrapProxy(config)(request));
+    setRequestHeaders(forwarded.headers);
+    if (method === "HEAD") {
+      assert.equal((await getNoSkrapPageDecision("/products", config)).decision, "allow");
+      const changed = new Headers(forwarded.headers);
+      changed.set("cookie", "noskrap_visitor=forged");
+      setRequestHeaders(changed);
+    }
+    await assert.rejects(getNoSkrapPageDecision("/products", config), /proxy context/);
+  }
+  setRequestHeaders(new Headers());
+});
 
 test("route handler helper returns core decision", async () => {
   const result = await getNoSkrapDecision(

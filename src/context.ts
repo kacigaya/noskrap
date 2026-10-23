@@ -13,6 +13,7 @@ interface RequestContext {
   kind: "noskrap-request";
   method: string;
   urlHash: string;
+  pathnameHash?: string;
   hosts: string[];
   rewritten?: true;
   expiresAt: number;
@@ -35,6 +36,7 @@ export async function signContext(
     kind: "noskrap-request",
     method: request.method,
     urlHash: await hashUrl(request.url),
+    pathnameHash: await hashText(new URL(request.url).pathname),
     hosts: requestHosts(request.url, host),
     ...(rewritten ? { rewritten: true as const } : {}),
     expiresAt: (config.now?.() ?? Date.now()) + (config.contextTtlMs ?? CONTEXT_TTL_MS),
@@ -43,6 +45,24 @@ export async function signContext(
   };
   const secret = Array.isArray(config.secret) ? config.secret[0] : config.secret;
   return signVisitorToken(context, secret);
+}
+
+export async function readPageContext(
+  headers: Headers,
+  pathname: string,
+  config: NoSkrapConfig,
+): Promise<BotResult | null> {
+  const token = headers.get(CONTEXT_HEADER);
+  const host = headers.get("host");
+  if (!token || token.length > 8192 || !host || /[\s/\\?#@]/.test(host)) return null;
+  const context: unknown = await verifyVisitorToken(token, config.secret);
+  if (!isContext(context)) return null;
+  const now = config.now?.() ?? Date.now();
+  if (context.pathnameHash !== await hashText(pathname) || !["GET", "HEAD"].includes(context.method) ||
+    !context.hosts.includes(host.toLowerCase()) || context.expiresAt <= now ||
+    context.expiresAt > now + (config.contextTtlMs ?? CONTEXT_TTL_MS) ||
+    !headers.get("cookie")?.split(";").some(part => part.trim() === context.cookie.split(";")[0])) return null;
+  return { ...context.result, visitorId: context.id, headers: new Headers({ "set-cookie": context.cookie }) };
 }
 
 export async function readContext(
@@ -80,6 +100,7 @@ function isContext(value: unknown): value is RequestContext {
   if (
     record.kind !== "noskrap-request" || typeof record.id !== "string" ||
     typeof record.method !== "string" || typeof record.urlHash !== "string" ||
+    (record.pathnameHash !== undefined && typeof record.pathnameHash !== "string") ||
     !Array.isArray(record.hosts) || record.hosts.length === 0 ||
     !record.hosts.every(host => typeof host === "string") ||
     (record.rewritten !== undefined && record.rewritten !== true) ||
@@ -115,6 +136,10 @@ function requestHosts(requestUrl: string, host: string | null): string[] {
 
 async function hashUrl(requestUrl: string): Promise<string> {
   const { pathname, search } = new URL(requestUrl);
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(pathname + search));
+  return hashText(pathname + search);
+}
+
+async function hashText(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
 }

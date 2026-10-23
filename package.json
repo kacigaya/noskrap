@@ -1,6 +1,6 @@
 {
   "name": "noskrap",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Explainable bot-risk scoring for Next.js applications",
   "license": "MIT",
   "repository": {
@@ -24,6 +24,10 @@
     "./redis": {
       "types": "./dist/redis.d.ts",
       "default": "./dist/redis.js"
+    },
+    "./crawlers": {
+      "types": "./dist/crawlers.d.ts",
+      "default": "./dist/crawlers.js"
     }
   },
   "files": [
@@ -40,7 +44,9 @@
     "test:next15": "NOSKRAP_TEST_NEXT_MODULES=tests/next15/node_modules bun tests/integration.ts",
     "test:redis-sdk": "bun tests/redis-sdk.ts",
     "test:package": "bun tests/package.ts",
-    "test:node": "rm -rf .test-dist && tsc -p tsconfig.node-tests.json && node --import ./.test-dist/tests/node-setup.js --test .test-dist/src/*.test.js .test-dist/tests/publish.test.js"
+    "test:node": "rm -rf .test-dist && tsc -p tsconfig.node-tests.json && node --import ./.test-dist/tests/node-setup.js --test .test-dist/src/*.test.js .test-dist/tests/publish.test.js",
+    "test:integration:memory": "NOSKRAP_TEST_STORAGE=memory bun tests/integration.ts",
+    "test:next15:memory": "NOSKRAP_TEST_STORAGE=memory NOSKRAP_TEST_NEXT_MODULES=tests/next15/node_modules bun tests/integration.ts"
   },
   "peerDependencies": {
     "next": ">=15"

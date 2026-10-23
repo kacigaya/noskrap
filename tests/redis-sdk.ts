@@ -40,12 +40,12 @@ try {
     ["ioredis", io],
     ["upstash", adaptUpstashRedis(new UpstashRedis(upstashOptions), signal => new UpstashRedis({ ...upstashOptions, signal }))],
   ] as const;
-  const now = Date.now();
+  let now = Date.now();
   for (const [name, client] of clients) {
     const keyPrefix = `${prefix}${name}:`;
     const store = new RedisBotStorage(client, { keyPrefix, now: () => now });
     keys.add(`${keyPrefix}visitor:visitor`);
-    const counterKey = `${keyPrefix}counter:route:${Math.floor(now / 60000)}`;
+    const counterKey = `${keyPrefix}counter:60:route`;
     keys.add(counterKey);
     const signal = new AbortController().signal;
     await Promise.all(Array.from({ length: 10 }, (_, index) => store.setVisitor("visitor", { id: "visitor", lastSeen: index, lastInteractionAt: index }, 600, signal)));
@@ -55,7 +55,18 @@ try {
     const abort = new AbortController();
     abort.abort();
     await assert.rejects(store.incrementCounter("route", 60, abort.signal));
-    assert.equal(await backend.get(counterKey), "10");
+    assert.equal(await backend.send("HGET", [counterKey, "current"]), "10");
+    await backend.send("PERSIST", [counterKey]);
+    assert.equal(await store.incrementCounter("route", 60), 11);
+    assert(Number(await backend.send("TTL", [counterKey])) > 0);
+    now = (Math.floor(now / 60000) + 1) * 60000;
+    assert.equal(await store.incrementCounter("route", 60), 12, "Boundary requests must retain the previous burst");
+    now += 30000;
+    assert.equal(await store.incrementCounter("route", 60), 7.5, "Previous bucket weight must decay");
+    now -= 60000;
+    assert.equal(await store.incrementCounter("route", 60), 14, "Backward clocks must preserve counts");
+    now += 240000;
+    assert.equal(await store.incrementCounter("route", 60), 1);
     console.log(`${name}: real SDK reads, atomic Lua updates, concurrency, expiry and pre-abort passed.`);
   }
   // Node-redis propagates an already aborted command option to the actual SDK.

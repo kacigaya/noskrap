@@ -71,13 +71,15 @@ describe("telemetry token", () => {
 });
 
 describe("memory storage", () => {
-  test("expires counters by window", async () => {
+  test("weights the previous counter window", async () => {
     let now = 0;
     const storage = new MemoryBotStorage(() => now);
 
     assert.equal(await storage.incrementCounter("route", 1), 1);
     assert.equal(await storage.incrementCounter("route", 1), 2);
     now = 1001;
+    assert.equal(await storage.incrementCounter("route", 1), 2.998);
+    now = 3000;
     assert.equal(await storage.incrementCounter("route", 1), 1);
   });
 

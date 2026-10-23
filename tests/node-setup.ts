@@ -6,6 +6,9 @@ registerHooks({
     if (specifier === "next/server") {
       return { url: new URL("./next-server.js", import.meta.url).href, shortCircuit: true };
     }
+    if (specifier === "next/headers") {
+      return { url: new URL("./next-headers.js", import.meta.url).href, shortCircuit: true };
+    }
     return nextResolve(specifier, context);
   },
 });

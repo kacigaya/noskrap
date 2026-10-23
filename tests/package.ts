@@ -31,6 +31,7 @@ try {
   await symlink(join(directory, "package"), join(directory, "node_modules/noskrap"), "dir");
   await writeFile(join(directory, "smoke.mjs"), `
 import assert from "node:assert/strict";
+import { createVerifiedCrawlerVerifier } from "noskrap/crawlers";
 import { scoreRequest, MemoryBotStorage } from "noskrap/core";
 import { getNoSkrapDecision, createTurnstileVerifier } from "noskrap/next";
 import { RedisBotStorage, adaptNodeRedis, adaptUpstashRedis } from "noskrap/redis";
@@ -39,8 +40,8 @@ const config = { secret: "package-test-secret-at-least-32-bytes", storage: new M
 const request = new Request("https://example.test/api");
 assert.equal((await scoreRequest(request, config)).scoringAvailable, true);
 assert.equal((await getNoSkrapDecision(request, config)).scoringAvailable, true);
-for (const fn of [createTurnstileVerifier, RedisBotStorage, adaptNodeRedis, adaptUpstashRedis, showBotDetectedPopup, startNoSkrapBeacon]) assert.equal(typeof fn, "function");
-for (const entry of ["core", "next", "redis", "client"]) assert(import.meta.resolve("noskrap/" + entry).includes("/package/dist/"));
+for (const fn of [createVerifiedCrawlerVerifier, createTurnstileVerifier, RedisBotStorage, adaptNodeRedis, adaptUpstashRedis, showBotDetectedPopup, startNoSkrapBeacon]) assert.equal(typeof fn, "function");
+for (const entry of ["core", "next", "redis", "client", "crawlers"]) assert(import.meta.resolve("noskrap/" + entry).includes("/package/dist/"));
 `);
   const smoke = Bun.spawn(["node", join(directory, "smoke.mjs")], { cwd: directory, stdout: "inherit", stderr: "inherit" });
   assert.equal(await smoke.exited, 0, "Published entrypoints must work under Node without development dependencies");
@@ -49,5 +50,5 @@ for (const entry of ["core", "next", "redis", "client"]) assert(import.meta.reso
     await mkdir(outputDirectory, { recursive: true });
     await copyFile(archive, join(outputDirectory, filename), constants.COPYFILE_EXCL);
   }
-  console.log(`Package ${manifest.version}: tarball contents and all four Node entrypoints passed.`);
+  console.log(`Package ${manifest.version}: tarball contents and all five Node entrypoints passed.`);
 } finally { await rm(directory, { recursive: true, force: true }); }

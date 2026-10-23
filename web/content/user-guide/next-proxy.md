@@ -109,3 +109,28 @@ Storage errors/timeouts default to passing requests in observe mode and 503 in
 enforce mode. Configure `storageFailureMode` and `storageTimeoutMs` explicitly
 when your service needs another policy; monitor `scoringAvailable` in
 `onDecision`. A slow observation callback is awaited, so keep it bounded.
+
+## Server Components
+
+Use the page helper when the proxy matches the page:
+
+```tsx
+import { getNoSkrapPageDecision } from "noskrap/next";
+import { noSkrapConfig } from "@/lib/noskrap";
+
+export default async function ProductsPage() {
+  const result = await getNoSkrapPageDecision("/products", noSkrapConfig);
+  return <p>Decision: {result.decision}</p>;
+}
+```
+
+Pass the page's absolute pathname without a query or fragment. The helper reads
+`next/headers` and verifies the signed proxy context, page path, host, visitor
+cookie, method, and expiry. The decision already includes the query that the
+proxy scored. The helper does not rebuild a `Request` or run scoring again.
+
+Missing or mismatched context throws. Ensure the proxy matcher includes the
+page and use the same configuration in both places. Call the helper during
+request rendering, outside cached functions. Server Components cannot set the
+returned cookies; the proxy already sends them. Do not render scores or reasons
+in a public production page unless your application needs them.

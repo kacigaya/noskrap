@@ -40,7 +40,7 @@ describe("redis client contracts", () => {
   });
 
   test("rejects invalid counter replies and missing atomic commands", async () => {
-    const storage = new RedisBotStorage({ get: async () => null, eval: async () => "1" });
+    const storage = new RedisBotStorage({ get: async () => null, eval: async () => "invalid" });
     await assert.rejects(storage.incrementCounter("route", 60), new RegExp("invalid count"));
     assert.throws(() => new RedisBotStorage({ get: async () => null } as unknown as RedisLikeClient), new RegExp("implement eval\\(\\)"));
     await assert.rejects(storage.incrementCounter("route", 0), new RegExp("positive safe integer"));

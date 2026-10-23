@@ -48,6 +48,12 @@ export interface NoSkrapConfig {
     block: number;
   };
   rules?: RuleConfig[];
+  maxPageViewsWithoutInteraction?: number;
+  automationUserAgents?: RegExp[];
+  signalsTimeoutMs?: number;
+  signals?: (request: Request, signal: AbortSignal) => BotReason[] | Promise<BotReason[]>;
+  crawlerTimeoutMs?: number;
+  verifyCrawler?: (request: Request, signal: AbortSignal) => boolean | Promise<boolean>;
   now?: () => number;
 }
 
@@ -142,18 +148,26 @@ export async function scoreRequest(
   const secFetchMode = headers.get("sec-fetch-mode") ?? "";
   const secFetchSite = headers.get("sec-fetch-site") ?? "";
   const clientPlatform = headers.get("sec-ch-ua-platform") ?? "";
+  let verifiedCrawler = false;
+  if (config.verifyCrawler) {
+    try {
+      verifiedCrawler = await withDeadline(signal => config.verifyCrawler!(request, signal),
+        config.crawlerTimeoutMs ?? 1500, request.signal) === true;
+    } catch { /* DNS failure keeps the normal browser checks. */ }
+  }
 
-  if (isHtmlNavigation(request) && (!userAgent || !accept || !acceptLanguage)) {
+  if (!verifiedCrawler && isHtmlNavigation(request) && (!userAgent || !accept || !acceptLanguage)) {
     addReason("headers.missingBrowserHeaders", 25);
   }
 
-  if (AUTOMATION_UA.test(userAgent)) {
+  if (AUTOMATION_UA.test(userAgent) || config.automationUserAgents?.some(pattern =>
+    new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, "")).test(userAgent))) {
     addReason("browser.automationUa", 30);
   }
 
   // Browsers send these headers only to potentially trustworthy origins, so
   // plain HTTP deployments skip the checks instead of flagging every visitor.
-  if (isTrustworthyOrigin(url)) {
+  if (!verifiedCrawler && isTrustworthyOrigin(url)) {
     const browser = claimedBrowser(userAgent);
     if (browser && !secFetchMode) {
       addReason("headers.missingFetchMetadata", 25);
@@ -167,7 +181,7 @@ export async function scoreRequest(
   }
 
   if (
-    clientPlatform &&
+    !verifiedCrawler && clientPlatform &&
     /Android|iPhone|iPad/i.test(userAgent) !==
       /Android|iOS/i.test(clientPlatform)
   ) {
@@ -194,6 +208,8 @@ export async function scoreRequest(
   const interactionEnabled = ruleScore(config, "behavior.noRecentInteraction", 30) > 0;
   const churnEnabled = ruleScore(config, "behavior.cookieChurn", 20) > 0;
   const countNewVisitor = churnEnabled && !tokenPayload && !preflight;
+  const pageEnabled = config.maxPageViewsWithoutInteraction !== undefined &&
+    ruleScore(config, "behavior.noPageInteraction", 30) > 0 && isProtected && isHtmlNavigation(request);
   const ip = rateEnabled || countNewVisitor
     ? config.getClientIp?.(request)?.trim() : undefined;
   const routeKey = protectedRoute ?? "*";
@@ -201,7 +217,7 @@ export async function scoreRequest(
   try {
     const [existing, ipCount, visitorCount, newVisitorCount] = await storageOperation(
       signal => Promise.all([
-        interactionEnabled && tokenPayload && isProtected && isUnsafeMethod(request.method)
+        tokenPayload && ((interactionEnabled && isProtected && isUnsafeMethod(request.method)) || pageEnabled)
           ? storage.getVisitor(visitorId, signal)
           : Promise.resolve(null),
         rateEnabled && ip ? storage.incrementCounter(`ip:${ip}:${routeKey}`, RATE_WINDOW_SECONDS, signal) : Promise.resolve(0),
@@ -213,12 +229,18 @@ export async function scoreRequest(
       config, request.signal,
     );
     const interaction = existing?.lastInteractionAt;
+    const noInteraction = interaction === undefined || interaction > now || now - interaction >= INTERACTION_TTL_MS;
     if (
       interactionEnabled && isProtected && isUnsafeMethod(request.method) &&
-      (interaction === undefined || interaction > now ||
-        now - interaction >= INTERACTION_TTL_MS)
+      noInteraction
     ) {
       addReason("behavior.noRecentInteraction", 30);
+    }
+    if (pageEnabled && tokenPayload && noInteraction) {
+      const views = await storageOperation(signal => storage.incrementCounter(
+        `unattended:${visitorId}:${interaction ?? "none"}:${routeKey}`, INTERACTION_TTL_MS / 1000, signal,
+      ), config, request.signal);
+      if (views > config.maxPageViewsWithoutInteraction!) addReason("behavior.noPageInteraction", 30);
     }
     if (ipCount > IP_BURST_LIMIT || visitorCount > VISITOR_BURST_LIMIT) {
       addReason("rate.routeBurst", 35);
@@ -233,6 +255,22 @@ export async function scoreRequest(
   } catch (error) {
     if (!(error instanceof BotStorageError)) throw error;
     scoringAvailable = false;
+  }
+
+  if (config.signals) {
+    try {
+      const custom: unknown = await withDeadline(signal => config.signals!(request, signal),
+        config.signalsTimeoutMs ?? 1000, request.signal);
+      if (!Array.isArray(custom) || custom.length > 32) throw new TypeError("signals must return at most 32 custom reasons");
+      const seen = new Set<string>();
+      for (const reason of custom) {
+        if (!isCustomReason(reason) || seen.has(reason.ruleId)) throw new TypeError("signals require unique custom rule IDs and finite scores from 0 to 100");
+        seen.add(reason.ruleId);
+      }
+      for (const reason of custom) if (isCustomReason(reason)) addReason(reason.ruleId, reason.score);
+    } catch {
+      scoringAvailable = false;
+    }
   }
 
   const score = Math.min(
@@ -271,7 +309,8 @@ export async function recordTelemetry(
     await storageOperation(signal => storage.setVisitor(
       visitorId,
       { id: visitorId, lastSeen: now, lastInteractionAt: now },
-      INTERACTION_TTL_MS / 1000, signal,
+      // Keep the page-counter generation until both sliding buckets have expired.
+      INTERACTION_TTL_MS / 1000 * (config.maxPageViewsWithoutInteraction === undefined ? 1 : 2), signal,
     ), config, request.signal);
   }
   return { visitorId, headers: await visitorHeaders(visitorId, config.secret) };
@@ -404,7 +443,7 @@ export class MemoryBotStorage implements BotStorage {
     string,
     { value: VisitorState; expiresAt: number }
   >();
-  private counters = new Map<string, { value: number; expiresAt: number }>();
+  private counters = new Map<string, { value: number; previous: number; bucket: number; expiresAt: number }>();
 
   constructor(
     private readonly now: () => number = Date.now,
@@ -446,17 +485,18 @@ export class MemoryBotStorage implements BotStorage {
 
   async incrementCounter(key: string, windowSeconds: number): Promise<number> {
     validateWindow(windowSeconds);
+    key = `${windowSeconds}:${key}`;
+    const now = this.now();
+    const duration = windowSeconds * 1000;
     const existing = this.counters.get(key);
-    if (!existing || existing.expiresAt <= this.now()) {
-      this.makeRoom(this.counters, key);
-      this.counters.set(key, {
-        value: 1,
-        expiresAt: this.now() + windowSeconds * 1000,
-      });
-      return 1;
-    }
-    existing.value += 1;
-    return existing.value;
+    const bucket = Math.max(Math.floor(now / duration), existing?.bucket ?? -Infinity);
+    const previous = existing && existing.expiresAt > now
+      ? bucket === existing.bucket ? existing.previous : bucket === existing.bucket + 1 ? existing.value : 0
+      : 0;
+    const value = existing && bucket === existing.bucket && existing.expiresAt > now ? existing.value + 1 : 1;
+    this.makeRoom(this.counters, key);
+    this.counters.set(key, { value, previous, bucket, expiresAt: Math.max(existing?.expiresAt ?? 0, now + duration * 2) });
+    return value + previous * Math.min(1, 1 - (now - bucket * duration) / duration);
   }
 
   private makeRoom<T extends { expiresAt: number }>(
@@ -697,6 +737,19 @@ export function validateConfig(config: NoSkrapConfig): void {
   }
   validateDeadline(config.storageTimeoutMs, "storageTimeoutMs");
   validateDeadline(config.contextTtlMs, "contextTtlMs");
+  validateDeadline(config.signalsTimeoutMs, "signalsTimeoutMs");
+  validateDeadline(config.crawlerTimeoutMs, "crawlerTimeoutMs");
+  for (const name of ["signals", "verifyCrawler"] as const) {
+    if (config[name] !== undefined && typeof config[name] !== "function") throw new TypeError(`${name} must be a function`);
+  }
+  if (config.maxPageViewsWithoutInteraction !== undefined &&
+    (!Number.isSafeInteger(config.maxPageViewsWithoutInteraction) || config.maxPageViewsWithoutInteraction < 1)) {
+    throw new TypeError("maxPageViewsWithoutInteraction must be a positive safe integer");
+  }
+  if (config.automationUserAgents !== undefined && (!Array.isArray(config.automationUserAgents) ||
+    config.automationUserAgents.some(pattern => !(pattern instanceof RegExp)))) {
+    throw new TypeError("automationUserAgents must contain regular expressions");
+  }
   if ((config.contextTtlMs ?? 0) > 300_000) throw new TypeError("contextTtlMs must not exceed 300000");
   if (config.storageFailureMode !== undefined && !["open", "closed"].includes(config.storageFailureMode)) {
     throw new TypeError('storageFailureMode must be "open" or "closed"');
@@ -746,6 +799,12 @@ export function validateConfig(config: NoSkrapConfig): void {
       throw new TypeError("rules require an id and a non-negative score");
     }
   }
+}
+
+function isCustomReason(value: unknown): value is BotReason {
+  if (typeof value !== "object" || value === null) return false;
+  return "ruleId" in value && typeof value.ruleId === "string" && /^custom\.[a-zA-Z0-9_.-]{1,120}$/.test(value.ruleId) &&
+    "score" in value && typeof value.score === "number" && Number.isFinite(value.score) && value.score >= 0 && value.score <= 100;
 }
 
 export function validateWindow(seconds: number): void {

@@ -54,10 +54,7 @@ jobs:
       - run: bun install --cwd web --frozen-lockfile
       - run: bun install --cwd tests/next15 --frozen-lockfile
       - run: bun audit --audit-level=high
-      # braces GHSA-vfj7-8cjw-p6xm has no patched release; it only reaches docs lint
-      # through eslint-config-next, which globs repository files. Drop the ignore
-      # once braces ships a fix.
-      - run: bun audit --audit-level=high --ignore GHSA-vfj7-8cjw-p6xm
+      - run: bun audit --audit-level=high
         working-directory: web
       - run: bun audit --audit-level=high
         working-directory: tests/next15

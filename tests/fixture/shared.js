@@ -8,7 +8,7 @@ const call = async (method, args, signal) => {
 export const config = {
   secret: process.env.NOSKRAP_TEST_SECRET,
   contextTtlMs: 60_000,
-  protectedRoutes: ["/api/"],
+  protectedRoutes: ["/api/", "/products"],
   storage: {
     getVisitor: (id, signal) => call("getVisitor", [id], signal),
     setVisitor: (id, state, ttl, signal) => call("setVisitor", [id, state, ttl], signal),
