@@ -86,10 +86,17 @@ export function NoSkrapBeacon({ token }: { token: string }) {
         body: JSON.stringify(payload),
       });
     };
-    const interact = () => send({ interacted: true });
+    // Interaction counts for 10 minutes. Resend at most every 5 minutes so
+    // a layout that stays mounted keeps it fresh without a request per click.
+    let lastSent = -Infinity;
+    const interact = () => {
+      if (Date.now() - lastSent < 5 * 60 * 1000) return;
+      lastSent = Date.now();
+      send({ interacted: true });
+    };
 
-    window.addEventListener("pointerdown", interact, { once: true });
-    window.addEventListener("keydown", interact, { once: true });
+    window.addEventListener("pointerdown", interact);
+    window.addEventListener("keydown", interact);
 
     return () => {
       window.removeEventListener("pointerdown", interact);

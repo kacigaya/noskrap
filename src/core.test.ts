@@ -271,6 +271,11 @@ describe("scoring", () => {
     for (let index = 0; index < 20; index += 1) first = await ids();
     expect(first).toEqual([]);
     expect(await ids()).toEqual(["behavior.cookieChurn"]);
+    // Preflights cannot carry cookies and are not counted.
+    const preflight = await scoreRequest(new Request("https://example.test/", {
+      method: "OPTIONS", headers: { "access-control-request-method": "POST" },
+    }), { ...config, protectedRoutes: ["/"] });
+    expect(preflight.reasons.map(reason => reason.ruleId)).toEqual([]);
     // Returning visitors keep their cookie and are not counted.
     const cookie = `noskrap_visitor=${await signVisitorToken({ id: "v_returning" }, SECRET)}`;
     expect(await ids({ cookie })).toEqual([]);

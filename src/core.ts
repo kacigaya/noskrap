@@ -182,7 +182,9 @@ export async function scoreRequest(
     addReason("headers.badFetchMetadata", 20);
   }
 
-  if (!tokenPayload && isProtected) {
+  // CORS preflights never carry cookies, so they say nothing about continuity.
+  const preflight = isPreflight(request);
+  if (!tokenPayload && isProtected && !preflight) {
     addReason("behavior.noCookieContinuity", 15);
   }
 
@@ -191,7 +193,8 @@ export async function scoreRequest(
   const rateEnabled = ruleScore(config, "rate.routeBurst", 35) > 0;
   const interactionEnabled = ruleScore(config, "behavior.noRecentInteraction", 30) > 0;
   const churnEnabled = ruleScore(config, "behavior.cookieChurn", 20) > 0;
-  const ip = rateEnabled || (churnEnabled && !tokenPayload)
+  const countNewVisitor = churnEnabled && !tokenPayload && !preflight;
+  const ip = rateEnabled || countNewVisitor
     ? config.getClientIp?.(request)?.trim() : undefined;
   const routeKey = protectedRoute ?? "*";
   let scoringAvailable = true;
@@ -205,7 +208,7 @@ export async function scoreRequest(
         rateEnabled && tokenPayload ? storage.incrementCounter(`visitor:${visitorId}:${routeKey}`, RATE_WINDOW_SECONDS, signal) : Promise.resolve(0),
         // A client that drops its cookie restarts the per-visitor counter, so
         // count fresh visitor IDs per IP across all routes instead.
-        churnEnabled && ip && !tokenPayload ? storage.incrementCounter(`new:${ip}`, RATE_WINDOW_SECONDS, signal) : Promise.resolve(0),
+        countNewVisitor && ip ? storage.incrementCounter(`new:${ip}`, RATE_WINDOW_SECONDS, signal) : Promise.resolve(0),
       ]),
       config, request.signal,
     );
@@ -603,12 +606,14 @@ function isTrustworthyOrigin(url: URL): boolean {
     /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
 }
 
+function isPreflight(request: Request): boolean {
+  return request.method === "OPTIONS" && request.headers.has("access-control-request-method");
+}
+
 // CORS preflights never carry Client Hints, and Android WebView added them in
 // version 116. Both still send Sec-Fetch-*, so only this check is skipped.
 function sendsClientHints(request: Request, userAgent: string): boolean {
-  if (request.method === "OPTIONS" && request.headers.has("access-control-request-method")) {
-    return false;
-  }
+  if (isPreflight(request)) return false;
   const webView = /; wv\).*Chrome\/(\d+)/.exec(userAgent);
   return !webView || Number(webView[1]) >= 116;
 }
