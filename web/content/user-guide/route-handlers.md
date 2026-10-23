@@ -39,7 +39,9 @@ Keep `x-noskrap-context` and Next.js internal request override headers private.
 Do not echo them to clients or log them. Read the decision at handler entry,
 before slow work. For measured proxy-to-handler delays, set `contextTtlMs` in
 both layers; it accepts 1–300,000 ms. A longer lifetime increases the replay
-window if an internal context leaks. Expired context still triggers fresh
+window if an internal context leaks. If one Next.js server hosts several sites or
+tenants, give each one its own secret. Behind a shared internal host, the
+context host check cannot tell them apart. Expired context still triggers fresh
 scoring, including another counter increment.
 
 Resolve rewrites inside NoSkrap so scoring and the signed context use the
