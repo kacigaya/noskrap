@@ -32,12 +32,9 @@ jobs:
       - name: Install dependencies
         working-directory: web
         run: bun install --frozen-lockfile
-      # braces GHSA-vfj7-8cjw-p6xm has no patched release; it only reaches docs lint
-      # through eslint-config-next, which globs repository files. Drop the ignore
-      # once braces ships a fix.
       - name: Audit dependencies
         working-directory: web
-        run: bun audit --audit-level=high --ignore GHSA-vfj7-8cjw-p6xm
+        run: bun audit --audit-level=high
       - name: Lint docs
         working-directory: web
         run: bun run lint

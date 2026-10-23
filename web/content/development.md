@@ -40,6 +40,29 @@ The Node command loads it with a test-only module hook. The separate production
 integration tests use real Next.js 15 and 16. The full `check` command runs both
 unit suites in CI and before package publication.
 
+## Redis-free integration
+
+Run production integration without Redis:
+
+```bash
+bun run build
+bun run test:integration:memory
+bun run test:next15:memory
+```
+
+These commands use a shared in-memory test backend for the fixture bundles.
+They exercise the same Next.js routes and Server Component helper. They do not
+test Redis scripts or SDKs. The full gate still requires Redis.
+
+For a disposable local Redis service, run:
+
+```bash
+docker run --rm -d --name noskrap-test-redis -p 127.0.0.1:6379:6379 redis:7.4-alpine
+```
+
+After the full gate finishes, stop that container with
+`docker stop noskrap-test-redis`.
+
 ## Test app
 
 The integration fixture is a test harness, not a supported demo app.
@@ -109,7 +132,7 @@ token. Publication requires a `vX.Y.Z` tag matching `package.json` and pointing
 to a commit already on `main`. Prereleases are skipped.
 
 The workflow installs frozen dependency trees, audits all three trees, and runs
-the full gate against Redis 7.4. It tests the packed tarball's four entrypoints
+the full gate against Redis 7.4. It tests the packed tarball's five entrypoints
 under Node.js without development dependencies. A separate job publishes that
 same verified tarball; only that job receives permission to request an OIDC
 token. It checks public version metadata and artifact integrity afterward,

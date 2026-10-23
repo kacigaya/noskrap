@@ -1,6 +1,6 @@
 # API Reference
 
-NoSkrap exports four entrypoints.
+NoSkrap exports five entrypoints.
 
 ## `noskrap/next`
 
@@ -8,6 +8,7 @@ NoSkrap exports four entrypoints.
 | --- | --- |
 | `createNoSkrapProxy(config)` | Creates a Next.js proxy or middleware function. |
 | `getNoSkrapDecision(request, config)` | Reuses verified proxy context, otherwise scores directly. |
+| `getNoSkrapPageDecision(pathname, config)` | Reads a signed proxy decision in a Server Component. Throws if context is missing, expired, or mismatched. Never scores again. |
 | `createNoSkrapTelemetryHandler(config)` | Requires `verifyTelemetry(request, payload, rawBody)`. |
 | `createNoSkrapChallengePassHandler(config)` | Requires `verifyChallenge(request, signal)`. Accepts POST only. |
 | `createTurnstileVerifier(options)` | Creates a challenge verifier using `secretKey`, required `expectedHostname`, and optional `expectedAction`. Accepts JSON `{ token }`. |
@@ -37,6 +38,12 @@ NoSkrap exports four entrypoints.
 | `adaptNodeRedis(client)` | Adapts node-redis's `eval(script, { keys, arguments })`. |
 | `adaptUpstashRedis(client)` | Adapts Upstash's `eval(script, keys, args)`. |
 
+## `noskrap/crawlers`
+
+`createVerifiedCrawlerVerifier({ getClientIp, resolver? })` creates a Node-only
+Googlebot and Bingbot verifier. Set it as `verifyCrawler` in the shared config.
+It checks both reverse and forward DNS. See [Detection controls](/docs/api-reference#detection-controls).
+
 ## `noskrap/client`
 
 | API | Description |
@@ -58,7 +65,9 @@ can evict the oldest inserted live record. Losing interaction state can cause
 false positives; losing counters weakens rate limits.
 
 Only verified `interacted: true` telemetry creates an interaction record, with
-a 10-minute TTL. False telemetry does not erase or refresh it. Scoring no longer
+a 10-minute TTL. When page-view tracking is enabled, the record stays for 20
+minutes to reset both page-counter buckets. Interaction still counts for only
+10 minutes. False telemetry does not erase or refresh it. Scoring no longer
 creates 30-day visitor records. Signed visitor cookies still last 30 days;
 a cookie-less request gets an IP counter only when a trusted IP resolver is
 configured, and no visitor counter until it returns a valid cookie.
@@ -66,13 +75,15 @@ configured, and no visitor counter until it returns a valid cookie.
 Custom storage must atomically merge `setVisitor` timestamps using the maximum
 of existing and supplied `lastSeen` and `lastInteractionAt`. A read followed by
 a write is unsafe under concurrent telemetry. `incrementCounter` must atomically
-increment and ensure expiry. Missing visitor records return `null`; outages
+increment and ensure expiry. The built-in stores return a sliding estimate,
+which can be fractional. Custom stores should keep the same two-window policy.
+Missing visitor records return `null`; outages
 must reject rather than silently return an empty record or zero counter.
 
 ### Redis
 
 Redis clients need `get` and `eval`, plus Redis permissions for `GET`, `SET`,
-`INCR`, `TTL` and `EXPIRE` inside Lua scripts. ioredis works directly:
+`HMGET`, `HSET` and `EXPIRE` inside Lua scripts. ioredis works directly:
 
 ```ts
 // lib/noskrap.ts; reuse this config in every integration entrypoint.
@@ -103,10 +114,21 @@ Next.js 16 `proxy.ts` runs in Node.js and supports TCP clients. Next.js 15
 `middleware.ts` defaults to [Edge](https://nextjs.org/docs/15/app/api-reference/file-conventions/middleware#runtime); use an HTTP client such as Upstash there.
 Use the same shared service and prefix for Node.js route handlers.
 
-Keys default to `noskrap:`; customize with `{ keyPrefix }`. Counter buckets are
-clock-aligned 60-second windows. A boundary resets the count, so a burst can
-span two windows. Keep instance clocks synchronized. Each write and expiry is
-atomic; legacy counter keys without TTL are repaired on the next increment.
+Keys default to `noskrap:`; customize with `{ keyPrefix }`. Counters use
+clock-aligned windows and a two-window estimate:
+`current + previous * (1 - elapsed / window)`. At a boundary, the previous
+bucket still counts. The estimate assumes an even distribution within that
+bucket. It is not an exact request log.
+
+Each counter uses one bounded record: a memory entry or a Redis hash. Redis
+keeps one key per counter, with a TTL of two window lengths. The script updates
+both the counts and expiry atomically. A missing TTL is repaired on increment.
+Backward clock movement keeps the older bucket and its full previous count.
+Keep instance clocks synchronized.
+
+Version 0.7 uses new Redis counter keys. Existing 0.6 counter keys expire on
+their old TTL. Visitor and interaction keys are unchanged. Counters start fresh
+when upgrading. No data migration or database flush is required.
 
 ## Config
 
@@ -124,6 +146,12 @@ interface NoSkrapConfig {
   storage?: BotStorage;
   thresholds?: { observe: number; challenge: number; block: number };
   rules?: RuleConfig[];
+  maxPageViewsWithoutInteraction?: number;
+  automationUserAgents?: RegExp[];
+  signalsTimeoutMs?: number;
+  signals?: (request: Request, signal: AbortSignal) => BotReason[] | Promise<BotReason[]>;
+  crawlerTimeoutMs?: number;
+  verifyCrawler?: (request: Request, signal: AbortSignal) => boolean | Promise<boolean>;
   now?: () => number;
 }
 ```
@@ -133,7 +161,8 @@ Secrets need at least 32 characters. Proxy configuration also accepts exact
 `onDecision(result, request, signal)`. The observation omits visitor
 IDs and cookies and includes `scoringAvailable`.
 
-Storage calls run concurrently and have a 1,000 ms total deadline by default.
+Storage calls in each batch run concurrently with a 1,000 ms deadline by default.
+Optional page-view tracking uses a second batch after reading interaction state.
 Failure leaves header-derived rules intact and marks `scoringAvailable: false`;
 it does not fabricate storage-dependent reasons. The proxy defaults to opening
 in observe mode and returning 503 in enforce mode. Set `storageFailureMode`
@@ -220,6 +249,7 @@ Default bands are 0–29 allow, 30–59 observe, 60–84 challenge and 85–100 
 | `headers.badFetchMetadata` | 20 | Protected write without `sec-fetch-mode`, or with `sec-fetch-site: none`. |
 | `behavior.noCookieContinuity` | 15 | Protected request without a valid visitor cookie. |
 | `behavior.noRecentInteraction` | 30 | Protected write without telemetry in the last 10 minutes. |
+| `behavior.noPageInteraction` | 30 | More than `maxPageViewsWithoutInteraction` protected HTML GETs without recent interaction. Disabled unless configured. |
 | `rate.routeBurst` | 35 | More than 60 requests per trusted IP or 30 per visitor in one window. |
 | `behavior.cookieChurn` | 20 | More than 20 requests without a valid visitor cookie from one trusted IP in one window. Catches clients that drop cookies to reset the visitor counter. Needs `getClientIp`. |
 | `rate.heavyBurst` | 30 | Three times the `rate.routeBurst` limits. Adds to it, so a heavy burst alone reaches the challenge band. |
@@ -283,3 +313,102 @@ Callbacks receive an `AbortSignal` as their final argument. Pass it to `fetch`
 and other cooperative operations. Existing callbacks can omit this argument.
 A timeout cannot stop synchronous blocking code or an operation that ignores
 cancellation; avoid CPU-heavy work and configure provider transport timeouts.
+
+## Detection controls
+
+### Page reads without interaction
+
+```ts
+const noSkrapConfig = {
+  secret: process.env.NOSKRAP_SECRET!,
+  protectedRoutes: ["/products"],
+  maxPageViewsWithoutInteraction: 20,
+  rules: [{ id: "behavior.noPageInteraction", score: 60 }],
+};
+```
+
+This opt-in rule counts protected HTML GETs for visitors with a valid signed
+cookie. It adds 30 points by default after more than the configured number of
+views in a sliding 10-minute estimate. The example uses 60 points to reach the
+default challenge threshold. Set enforce mode and a challenge path to enforce
+that decision. API GETs, HEAD requests, and unprotected pages do not count.
+
+Add the client beacon and telemetry handler before enabling this rule. Recent
+verified interaction stops the count. After interaction becomes stale, a new
+counter starts. Keep the same config in the proxy and telemetry handler.
+Disabling `behavior.noPageInteraction` stops its storage reads and writes.
+Visitors that discard cookies do not get per-visitor page counters; trusted-IP
+rate and cookie-churn rules cover that traffic.
+
+### Custom signals
+
+```ts
+const noSkrapConfig = {
+  secret: process.env.NOSKRAP_SECRET!,
+  signals: async (request: Request, signal: AbortSignal) => {
+    const risk = await lookupYourReputationData(request, signal);
+    return risk ? [{ ruleId: "custom.reputation", score: 40 }] : [];
+  },
+};
+```
+
+The hook may return at most 32 reasons. Each reason needs a unique ID beginning
+with `custom.` and a finite score from 0 to 100. The rest of the ID accepts
+letters, digits, dots, underscores, and hyphens, up to 120 characters.
+`rules` can rescore or disable these IDs. The final total remains capped at 100.
+
+`signalsTimeoutMs` defaults to 1,000 ms. Errors, invalid results, and timeouts
+set `scoringAvailable: false`. The existing failure policy then applies. Pass
+the signal to network or database calls. Use server-owned reputation data.
+Trust CDN headers only when your ingress removes client-supplied values and
+prevents clients from reaching the origin directly.
+
+### Verified search crawlers
+
+```ts
+// Node.js only, including Next.js 16 proxy.ts.
+import { createVerifiedCrawlerVerifier } from "noskrap/crawlers";
+
+const noSkrapConfig = {
+  secret: process.env.NOSKRAP_SECRET!,
+  getClientIp: resolveYourTrustedClientIp,
+  verifyCrawler: createVerifiedCrawlerVerifier({
+    getClientIp: resolveYourTrustedClientIp,
+  }),
+};
+```
+
+The adapter checks declared Googlebot and Bingbot agents. It requires a trusted
+IP resolver. It verifies a reverse-DNS suffix of `.googlebot.com` for Googlebot
+or `.search.msn.com` for Bingbot, then checks that forward DNS returns the
+original address. IPv4 and IPv6 are supported. A declared agent alone does not
+verify a crawler. The method follows the official
+[Google](https://developers.google.com/crawling/docs/crawlers-fetchers/verify-google-requests)
+and [Bing](https://www.bing.com/webmasters/help/how-to-verify-bingbot-3905dc26)
+guides.
+
+Verified crawlers skip passive browser-header checks. Rate limits, cookie
+continuity, interaction rules, custom signals, and enforcement still apply.
+DNS errors leave the normal header checks enabled. Results stay in a bounded
+process-local cache: five minutes for success and 30 seconds for failure, with
+at most 1,000 entries. The adapter checks at most eight reverse-DNS names.
+`crawlerTimeoutMs` defaults to 1,500 ms. Cancellation reaches the DNS resolver.
+
+The DNS adapter is a separate Node-only entrypoint. Next.js 15 Edge middleware
+must use its own `verifyCrawler(request, signal)` implementation through a
+trusted verification service. Do not import `noskrap/crawlers` into Edge code.
+An optional `resolver` factory supports custom DNS implementations.
+
+### Automation user agents
+
+```ts
+const noSkrapConfig = {
+  secret: process.env.NOSKRAP_SECRET!,
+  automationUserAgents: [/MyInternalCrawler/i, /ExampleScraper\//i],
+};
+```
+
+Patterns extend the built-in automation list. They use the existing
+`browser.automationUa` rule. Global and sticky flags do not keep match state
+between requests. Use simple expressions because matching runs on every
+request. The user-agent value still comes from the client.
