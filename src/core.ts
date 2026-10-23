@@ -116,7 +116,7 @@ export async function scoreRequest(
   const thresholds = config.thresholds ?? DEFAULT_THRESHOLDS;
   const token = getCookie(request, VISITOR_COOKIE);
   const tokenPayload = token
-    ? await verifyVisitorToken(token, config.secret)
+    ? await verifyVisitorCookie(token, config.secret)
     : null;
   const visitorId = tokenPayload?.id ?? createId();
 
@@ -257,7 +257,7 @@ export async function recordTelemetry(
   validateConfig(config);
   if (typeof payload.interacted !== "boolean") throw new TypeError("interacted must be a boolean");
   const token = getCookie(request, VISITOR_COOKIE);
-  const visitor = token ? await verifyVisitorToken(token, config.secret) : null;
+  const visitor = token ? await verifyVisitorCookie(token, config.secret) : null;
   const visitorId = visitor?.id ?? createId();
   const now = config.now?.() ?? Date.now();
   const storage = config.storage ?? getDefaultStorage();
@@ -291,7 +291,7 @@ export async function createChallengePassHeaders(
   validateConfig(config);
   const visitorToken = getCookie(request, VISITOR_COOKIE);
   const visitor = visitorToken
-    ? await verifyVisitorToken(visitorToken, config.secret)
+    ? await verifyVisitorCookie(visitorToken, config.secret)
     : null;
   if (!visitor) return null;
 
@@ -322,7 +322,7 @@ export async function verifyChallengePass(
   const challengeToken = getCookie(request, CHALLENGE_COOKIE);
   if (!visitorToken || !challengeToken) return false;
 
-  const visitor = await verifyVisitorToken(visitorToken, config.secret);
+  const visitor = await verifyVisitorCookie(visitorToken, config.secret);
   const challenge = await verifyChallengePassToken(challengeToken, config.secret);
   const now = config.now?.() ?? Date.now();
 
@@ -356,7 +356,7 @@ export async function createTelemetryToken(
 ): Promise<string | null> {
   validateConfig(config);
   const visitorToken = getCookie(request, VISITOR_COOKIE);
-  const visitor = visitorToken ? await verifyVisitorToken(visitorToken, config.secret) : null;
+  const visitor = visitorToken ? await verifyVisitorCookie(visitorToken, config.secret) : null;
   if (!visitor) return null;
   const token: TelemetryToken = {
     id: visitor.id,
@@ -384,7 +384,7 @@ export async function verifyTelemetryToken(
   if (!token || token.length > 1024 || !visitorToken) return false;
   const [payload, visitor] = await Promise.all([
     verifyVisitorToken(token, config.secret) as Promise<Partial<TelemetryToken> | null>,
-    verifyVisitorToken(visitorToken, config.secret),
+    verifyVisitorCookie(visitorToken, config.secret),
   ]);
   if (!payload || !visitor || payload.kind !== "noskrap-telemetry" ||
     payload.id !== visitor.id || typeof payload.issuedAt !== "number") return false;
@@ -536,6 +536,16 @@ export async function verifyVisitorToken(
     }
   }
   return null;
+}
+
+// The same signer issues visitor cookies, request contexts and telemetry
+// tokens. Only a plain visitor payload, without a `kind`, is a visitor cookie.
+async function verifyVisitorCookie(
+  token: string,
+  secrets: string | string[],
+): Promise<{ id: string } | null> {
+  const payload = await verifyVisitorToken(token, secrets);
+  return payload && !("kind" in payload) ? payload : null;
 }
 
 async function signChallengePassToken(

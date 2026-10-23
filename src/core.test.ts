@@ -58,6 +58,12 @@ describe("telemetry token", () => {
     // Other signed tokens, such as the visitor cookie itself, are not accepted.
     expect(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: cookie.split("=")[1] })).toBe(false);
     expect(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: `${token}x` })).toBe(false);
+    // A telemetry token is not a visitor cookie.
+    const scored = await scoreRequest(new Request("https://example.test/api", {
+      headers: { cookie: `noskrap_visitor=${token}` },
+    }), { ...config, protectedRoutes: ["/api"], storage: new MemoryBotStorage() });
+    expect(scored.visitorId).not.toBe("v_one");
+    expect(scored.reasons.map(reason => reason.ruleId)).toContain("behavior.noCookieContinuity");
     now += 10 * 60 * 1000;
     expect(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token })).toBe(false);
     expect(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token }, { maxAgeMs: 20 * 60 * 1000 })).toBe(true);
