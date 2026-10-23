@@ -20,6 +20,9 @@ NoSkrap exports four entrypoints.
 | `BotStorageError` | Persistence failure or timeout thrown by `recordTelemetry`. |
 | `createChallengePassHeaders(request, config)` | Issues a challenge cookie for an existing signed visitor. |
 | `verifyChallengePass(request, config)` | Checks a visitor-bound, expiring challenge cookie. |
+| `createTelemetryToken(request, config)` | Signs a telemetry token for the visitor cookie, or returns `null`. |
+| `verifyTelemetryToken(request, config, options?)` | Checks the `x-noskrap-telemetry` header against the visitor cookie and the `minAgeMs`/`maxAgeMs` window. |
+| `TELEMETRY_TOKEN_HEADER` | The header name, `x-noskrap-telemetry`. |
 | `decisionForScore(score, thresholds?)` | Maps a score to a decision. |
 | `MemoryBotStorage` | Bounded development/test storage; default when storage is omitted. |
 | `signVisitorToken(payload, secret)` | Signs a visitor token, including Unicode IDs. |
@@ -208,11 +211,13 @@ Default bands are 0–29 allow, 30–59 observe, 60–84 challenge and 85–100 
 | `browser.automationUa` | 30 | User agent of a headless browser or HTTP library, such as `HeadlessChrome`, `curl`, `python-httpx`, `Go-http-client`, `node`, `axios` or `Scrapy`. |
 | `headers.missingFetchMetadata` | 25 | User agent claims Chromium 89+, Firefox 90+ or Safari 16.4+, but the request has no `sec-fetch-mode`. |
 | `headers.missingClientHints` | 15 | User agent claims Chromium 89+, but the request has no `sec-ch-ua`. |
+| `headers.unbrandedChromium` | 10 | User agent claims Chromium 89+, but `sec-ch-ua` names no vendor brand (only `Chromium` and a GREASE brand). Bare Chromium and Vivaldi users match too, so the score is low. |
 | `headers.uaClientHintsMismatch` | 15 | Mobile user agent and `sec-ch-ua-platform` disagree. |
 | `headers.badFetchMetadata` | 20 | Protected write without `sec-fetch-mode`, or with `sec-fetch-site: none`. |
 | `behavior.noCookieContinuity` | 15 | Protected request without a valid visitor cookie. |
 | `behavior.noRecentInteraction` | 30 | Protected write without telemetry in the last 10 minutes. |
 | `rate.routeBurst` | 35 | More than 60 requests per trusted IP or 30 per visitor in one window. |
+| `behavior.cookieChurn` | 20 | More than 20 requests without a valid visitor cookie from one trusted IP in one window. Catches clients that drop cookies to reset the visitor counter. Needs `getClientIp`. |
 | `rate.heavyBurst` | 30 | Three times the `rate.routeBurst` limits. Adds to it, so a heavy burst alone reaches the challenge band. |
 
 Browsers send fetch metadata and Client Hints only to HTTPS and localhost

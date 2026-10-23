@@ -29,7 +29,7 @@ failure; choose that policy explicitly for endpoints enforcing locally.
 
 When the proxy already scored the request, this helper verifies and reuses its
 signed context instead of incrementing counters again. The context binds the
-URL, method and forwarded visitor cookie, expires after 30 seconds by default,
+URL path and query, method and forwarded visitor cookie, expires after 30 seconds by default,
 and requires the same secrets in both layers. A handler reached directly scores normally.
 Use the same policy configuration in both layers: the proxy owns the decision
 when its context is valid. Use `scoreRequest` explicitly if you need a different
@@ -54,7 +54,7 @@ export const proxy = createNoSkrapProxy({
 });
 ```
 
-Context remains bound to the exact destination URL. If Next.js runs the proxy
+Context remains bound to the destination path and query. If Next.js runs the proxy
 again after rewriting, it reuses only a verified rewrite context for that
 destination; counters and observation callbacks run once.
 The synchronous resolver must return a same-origin URL without a fragment or
@@ -63,6 +63,32 @@ in the Next.js matcher. The original method, body and query selected by the
 resolver reach the rewritten handler. Recovery routes bypass the resolver.
 External rewrites or rewrites added after scoring change the bound URL and
 trigger fresh scoring; use the integrated resolver to avoid duplicate counts.
+
+## Server Components
+
+A Server Component has no `Request`. Build one from `headers()`, with the path
+and query that the proxy saw. The host can differ, because the context binds
+only the path and query.
+
+```tsx
+// app/products/page.tsx
+import { headers } from "next/headers";
+import { getNoSkrapDecision } from "noskrap/next";
+import { noSkrapConfig } from "@/lib/noskrap";
+
+export default async function Products() {
+  const requestHeaders = await headers();
+  const request = new Request(`https://${requestHeaders.get("host")}/products`, {
+    headers: requestHeaders,
+  });
+  const result = await getNoSkrapDecision(request, noSkrapConfig);
+  // ...
+}
+```
+
+Keep the query string in the same order as the browser sent it. If the path
+or query differs, the helper scores the request again and increments the
+counters again.
 
 Each reason contains a stable `ruleId` and score contribution. Log these on the
 server for tuning; publish them only if your application's API needs them.

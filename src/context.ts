@@ -95,7 +95,11 @@ function isReason(value: unknown): boolean {
     Number.isFinite(reason.score) && reason.score >= 0;
 }
 
+// Bind to path and query only. Next.js can report a different host to the
+// proxy (for example `localhost`) than a handler rebuilds from the Host
+// header, and the proxy already overwrites this header on every request.
 async function hashUrl(url: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(url));
+  const { pathname, search } = new URL(url);
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(pathname + search));
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
 }

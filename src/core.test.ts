@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
   MemoryBotStorage,
+  TELEMETRY_TOKEN_HEADER,
   createChallengePassHeaders,
+  createTelemetryToken,
   decisionForScore,
   recordTelemetry,
   scoreRequest,
   signVisitorToken,
   verifyChallengePass,
+  verifyTelemetryToken,
   verifyVisitorToken,
 } from "./core";
 
@@ -30,6 +33,35 @@ describe("visitor token", () => {
       ]),
     ).toMatchObject({ id: "v_test" });
     expect(await verifyVisitorToken(`${token}.extra`, SECRET)).toBeNull();
+  });
+});
+
+describe("telemetry token", () => {
+  test("binds to the visitor and enforces its age window", async () => {
+    let now = 10_000;
+    const config = { secret: SECRET, now: () => now };
+    const cookie = `noskrap_visitor=${await signVisitorToken({ id: "v_one" }, SECRET)}`;
+    const other = `noskrap_visitor=${await signVisitorToken({ id: "v_two" }, SECRET)}`;
+    expect(await createTelemetryToken(new Request("https://example.test/"), config)).toBeNull();
+    const token = (await createTelemetryToken(new Request("https://example.test/", { headers: { cookie } }), config))!;
+    const verify = (headers: Record<string, string>, options?: { minAgeMs?: number; maxAgeMs?: number }) =>
+      verifyTelemetryToken(new Request("https://example.test/t", { method: "POST", headers }), config, options);
+
+    expect(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token })).toBe(true);
+    expect(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token }, { minAgeMs: 1000 })).toBe(false);
+    now -= 1;
+    expect(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token })).toBe(false);
+    now += 1001;
+    expect(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token }, { minAgeMs: 1000 })).toBe(true);
+    expect(await verify({ cookie: other, [TELEMETRY_TOKEN_HEADER]: token })).toBe(false);
+    expect(await verify({ cookie })).toBe(false);
+    // Other signed tokens, such as the visitor cookie itself, are not accepted.
+    expect(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: cookie.split("=")[1] })).toBe(false);
+    expect(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: `${token}x` })).toBe(false);
+    now += 10 * 60 * 1000;
+    expect(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token })).toBe(false);
+    expect(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token }, { maxAgeMs: 20 * 60 * 1000 })).toBe(true);
+    await expect(verify({ cookie }, { minAgeMs: 5, maxAgeMs: 5 })).rejects.toThrow(TypeError);
   });
 });
 
@@ -191,7 +223,10 @@ describe("scoring", () => {
 
   test("escalates a heavy burst into the challenge band", async () => {
     const storage = new MemoryBotStorage(() => 1000);
-    const config = { secret: SECRET, storage, getClientIp: () => "203.0.113.9" };
+    const config = {
+      secret: SECRET, storage, getClientIp: () => "203.0.113.9",
+      rules: [{ id: "behavior.cookieChurn", enabled: false }],
+    };
     const scores: number[] = [];
     for (let index = 0; index < 181; index += 1) {
       scores.push((await scoreRequest(new Request("https://example.test/search"), config)).score);
@@ -203,9 +238,34 @@ describe("scoring", () => {
     expect(decisionForScore(scores[180])).toBe("challenge");
 
     const disabled = await scoreRequest(new Request("https://example.test/search"), {
-      ...config, rules: [{ id: "rate.heavyBurst", enabled: false }],
+      ...config, rules: [...config.rules, { id: "rate.heavyBurst", enabled: false }],
     });
     expect(disabled.reasons.map(reason => reason.ruleId)).toEqual(["rate.routeBurst"]);
+  });
+
+  test("flags many new visitors from one trusted IP", async () => {
+    const storage = new MemoryBotStorage(() => 1000);
+    const config = { secret: SECRET, storage, getClientIp: () => "203.0.113.7" };
+    const ids = async (headers?: Record<string, string>) =>
+      (await scoreRequest(new Request("https://example.test/", { headers }), config)).reasons.map(reason => reason.ruleId);
+    let first;
+    for (let index = 0; index < 20; index += 1) first = await ids();
+    expect(first).toEqual([]);
+    expect(await ids()).toEqual(["behavior.cookieChurn"]);
+    // Returning visitors keep their cookie and are not counted.
+    const cookie = `noskrap_visitor=${await signVisitorToken({ id: "v_returning" }, SECRET)}`;
+    expect(await ids({ cookie })).toEqual([]);
+  });
+
+  test("flags Chromium client hints without a vendor brand", async () => {
+    const config = { secret: SECRET, storage: new MemoryBotStorage(() => 1000) };
+    const ids = async (brands: string) => (await scoreRequest(new Request("https://example.test/", {
+      headers: { "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36", "sec-fetch-mode": "cors", "sec-ch-ua": brands },
+    }), config)).reasons.map(reason => reason.ruleId);
+    expect(await ids('"Chromium";v="141", "Not_A Brand";v="8"')).toEqual(["headers.unbrandedChromium"]);
+    expect(await ids('"Not)A;Brand";v="99", "Chromium";v="141"')).toEqual(["headers.unbrandedChromium"]);
+    expect(await ids('"Google Chrome";v="141", "Not?A_Brand";v="8", "Chromium";v="141"')).toEqual([]);
+    expect(await ids('"Microsoft Edge";v="141", "Chromium";v="141", "Not_A Brand";v="24"')).toEqual([]);
   });
 
   test("adds route burst reason after repeated requests", async () => {
