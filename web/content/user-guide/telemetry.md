@@ -76,37 +76,29 @@ request, so first visits get a token too.
 "use client";
 
 import { useEffect } from "react";
+import { startNoSkrapBeacon } from "noskrap/client";
 
 export function NoSkrapBeacon({ token }: { token: string }) {
-  useEffect(() => {
-    const send = (payload: { interacted: boolean }) => {
-      void fetch("/api/noskrap/telemetry", {
-        method: "POST",
-        headers: { "x-noskrap-telemetry": token },
-        body: JSON.stringify(payload),
-      });
-    };
-    // Interaction counts for 10 minutes. Resend at most every 5 minutes so
-    // a layout that stays mounted keeps it fresh without a request per click.
-    let lastSent = -Infinity;
-    const interact = () => {
-      if (Date.now() - lastSent < 5 * 60 * 1000) return;
-      lastSent = Date.now();
-      send({ interacted: true });
-    };
-
-    window.addEventListener("pointerdown", interact);
-    window.addEventListener("keydown", interact);
-
-    return () => {
-      window.removeEventListener("pointerdown", interact);
-      window.removeEventListener("keydown", interact);
-    };
-  }, [token]);
-
+  useEffect(() => startNoSkrapBeacon({ token }), [token]);
   return null;
 }
 ```
+
+The package owns the event listeners and the resend limit. The wrapper returns
+its cleanup function to React. It removes both listeners when the component
+unmounts or the token changes. No React dependency is required by the package.
+
+The beacon sends `{ interacted: true }` on a trusted `pointerdown` or `keydown`.
+It sends at most once per five minutes while the page stays mounted. A later
+interaction triggers the next send. It does not send on a timer or page load.
+Synthetic `dispatchEvent` events do not count. Browser automation can still
+produce trusted input, so this signal is not proof of a human.
+
+For another framework, call `startNoSkrapBeacon({ token })` after mounting.
+Call the returned function during cleanup. An optional `endpoint` accepts a
+same-origin absolute path, for example `/base/api/noskrap/telemetry`. The default
+is `/api/noskrap/telemetry`. Network failures do not interrupt visitor actions.
+Failed sends still count toward the five-minute limit.
 
 Recent verified interaction lowers risk for protected state-changing requests.
 

@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
+import { describe, test } from "node:test";
 import {
   MemoryBotStorage,
   TELEMETRY_TOKEN_HEADER,
@@ -11,7 +12,7 @@ import {
   verifyChallengePass,
   verifyTelemetryToken,
   verifyVisitorToken,
-} from "./core";
+} from "./core.js";
 
 const SECRET = "test-secret-with-at-least-32-bytes";
 
@@ -22,17 +23,13 @@ describe("visitor token", () => {
       SECRET,
     );
 
-    expect(await verifyVisitorToken(token, SECRET)).toMatchObject({
-      id: "v_test",
-    });
-    expect(await verifyVisitorToken(`${token}x`, SECRET)).toBeNull();
-    expect(
-      await verifyVisitorToken(token, [
+    assert.equal((await verifyVisitorToken(token, SECRET))?.id, "v_test");
+    assert.equal(await verifyVisitorToken(`${token}x`, SECRET), null);
+    assert.equal((await verifyVisitorToken(token, [
         "old-test-secret-with-at-least-32-bytes",
         SECRET,
-      ]),
-    ).toMatchObject({ id: "v_test" });
-    expect(await verifyVisitorToken(`${token}.extra`, SECRET)).toBeNull();
+      ]))?.id, "v_test");
+    assert.equal(await verifyVisitorToken(`${token}.extra`, SECRET), null);
   });
 });
 
@@ -42,34 +39,34 @@ describe("telemetry token", () => {
     const config = { secret: SECRET, now: () => now };
     const cookie = `noskrap_visitor=${await signVisitorToken({ id: "v_one" }, SECRET)}`;
     const other = `noskrap_visitor=${await signVisitorToken({ id: "v_two" }, SECRET)}`;
-    expect(await createTelemetryToken(new Request("https://example.test/"), config)).toBeNull();
+    assert.equal(await createTelemetryToken(new Request("https://example.test/"), config), null);
     const token = (await createTelemetryToken(new Request("https://example.test/", { headers: { cookie } }), config))!;
     const verify = (headers: Record<string, string>, options?: { minAgeMs?: number; maxAgeMs?: number }) =>
       verifyTelemetryToken(new Request("https://example.test/t", { method: "POST", headers }), config, options);
 
-    expect(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token })).toBe(true);
-    expect(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token }, { minAgeMs: 1000 })).toBe(false);
+    assert.equal(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token }), true);
+    assert.equal(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token }, { minAgeMs: 1000 }), false);
     now -= 1;
-    expect(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token })).toBe(false);
+    assert.equal(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token }), false);
     now += 1001;
-    expect(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token }, { minAgeMs: 1000 })).toBe(true);
-    expect(await verify({ cookie: other, [TELEMETRY_TOKEN_HEADER]: token })).toBe(false);
-    expect(await verify({ cookie })).toBe(false);
+    assert.equal(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token }, { minAgeMs: 1000 }), true);
+    assert.equal(await verify({ cookie: other, [TELEMETRY_TOKEN_HEADER]: token }), false);
+    assert.equal(await verify({ cookie }), false);
     // Other signed tokens, such as the visitor cookie itself, are not accepted.
-    expect(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: cookie.split("=")[1] })).toBe(false);
-    expect(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: `${token}x` })).toBe(false);
+    assert.equal(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: cookie.split("=")[1] }), false);
+    assert.equal(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: `${token}x` }), false);
     // A telemetry token is not a visitor cookie.
     const scored = await scoreRequest(new Request("https://example.test/api", {
       headers: { cookie: `noskrap_visitor=${token}` },
     }), { ...config, protectedRoutes: ["/api"], storage: new MemoryBotStorage() });
-    expect(scored.visitorId).not.toBe("v_one");
-    expect(scored.reasons.map(reason => reason.ruleId)).toContain("behavior.noCookieContinuity");
+    assert.notEqual(scored.visitorId, "v_one");
+    assert.ok((scored.reasons.map(reason => reason.ruleId))?.includes("behavior.noCookieContinuity"));
     now += 10 * 60 * 1000;
-    expect(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token })).toBe(true);
-    expect(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token }, { maxAgeMs: 10 * 60 * 1000 })).toBe(false);
+    assert.equal(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token }), true);
+    assert.equal(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token }, { maxAgeMs: 10 * 60 * 1000 }), false);
     now += 24 * 60 * 60 * 1000;
-    expect(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token })).toBe(false);
-    await expect(verify({ cookie }, { minAgeMs: 5, maxAgeMs: 5 })).rejects.toThrow(TypeError);
+    assert.equal(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token }), false);
+    await assert.rejects(verify({ cookie }, { minAgeMs: 5, maxAgeMs: 5 }), TypeError);
   });
 });
 
@@ -78,10 +75,10 @@ describe("memory storage", () => {
     let now = 0;
     const storage = new MemoryBotStorage(() => now);
 
-    expect(await storage.incrementCounter("route", 1)).toBe(1);
-    expect(await storage.incrementCounter("route", 1)).toBe(2);
+    assert.equal(await storage.incrementCounter("route", 1), 1);
+    assert.equal(await storage.incrementCounter("route", 1), 2);
     now = 1001;
-    expect(await storage.incrementCounter("route", 1)).toBe(1);
+    assert.equal(await storage.incrementCounter("route", 1), 1);
   });
 
   test("bounds stored visitors", async () => {
@@ -90,9 +87,9 @@ describe("memory storage", () => {
     await storage.setVisitor("b", { id: "b", lastSeen: 0 }, 60);
     await storage.setVisitor("c", { id: "c", lastSeen: 0 }, 60);
 
-    expect(await storage.getVisitor("a")).toBeNull();
-    expect(await storage.getVisitor("b")).not.toBeNull();
-    expect(await storage.getVisitor("c")).not.toBeNull();
+    assert.equal(await storage.getVisitor("a"), null);
+    assert.notEqual(await storage.getVisitor("b"), null);
+    assert.notEqual(await storage.getVisitor("c"), null);
   });
 
   test("expires visitors by ttl", async () => {
@@ -101,7 +98,7 @@ describe("memory storage", () => {
     await storage.setVisitor("a", { id: "a", lastSeen: 0 }, 60);
 
     now = 60_000;
-    expect(await storage.getVisitor("a")).toBeNull();
+    assert.equal(await storage.getVisitor("a"), null);
   });
 
   test("evicts expired entries before live ones when full", async () => {
@@ -113,22 +110,22 @@ describe("memory storage", () => {
     now = 1_000;
     await storage.setVisitor("new", { id: "new", lastSeen: now }, 60);
 
-    expect(await storage.getVisitor("stale")).toBeNull();
-    expect(await storage.getVisitor("live")).not.toBeNull();
-    expect(await storage.getVisitor("new")).not.toBeNull();
+    assert.equal(await storage.getVisitor("stale"), null);
+    assert.notEqual(await storage.getVisitor("live"), null);
+    assert.notEqual(await storage.getVisitor("new"), null);
   });
 
   test("rejects an invalid capacity", () => {
-    expect(() => new MemoryBotStorage(Date.now, 0)).toThrow(TypeError);
+    assert.throws(() => new MemoryBotStorage(Date.now, 0), TypeError);
   });
 });
 
 describe("scoring", () => {
   test("maps score bands", () => {
-    expect(decisionForScore(0)).toBe("allow");
-    expect(decisionForScore(30)).toBe("observe");
-    expect(decisionForScore(60)).toBe("challenge");
-    expect(decisionForScore(85)).toBe("block");
+    assert.equal(decisionForScore(0), "allow");
+    assert.equal(decisionForScore(30), "observe");
+    assert.equal(decisionForScore(60), "challenge");
+    assert.equal(decisionForScore(85), "block");
   });
 
   test("scores curl-like protected request and sets safe cookie", async () => {
@@ -146,16 +143,10 @@ describe("scoring", () => {
       },
     );
 
-    expect(result.decision).toBe("block");
-    expect(result.reasons.map((reason) => reason.ruleId)).toContain(
-      "browser.automationUa",
-    );
-    expect(result.reasons.map((reason) => reason.ruleId)).toContain(
-      "behavior.noRecentInteraction",
-    );
-    expect(result.headers.get("set-cookie")).toContain(
-      "HttpOnly; Secure; SameSite=Lax; Path=/",
-    );
+    assert.equal(result.decision, "block");
+    assert.ok((result.reasons.map((reason) => reason.ruleId))?.includes("browser.automationUa"));
+    assert.ok((result.reasons.map((reason) => reason.ruleId))?.includes("behavior.noRecentInteraction"));
+    assert.ok((result.headers.get("set-cookie"))?.includes("HttpOnly; Secure; SameSite=Lax; Path=/"));
   });
 
   test("does not treat an invalid cookie as visitor continuity", async () => {
@@ -170,9 +161,7 @@ describe("scoring", () => {
       },
     );
 
-    expect(result.reasons.map((reason) => reason.ruleId)).toContain(
-      "behavior.noCookieContinuity",
-    );
+    assert.ok((result.reasons.map((reason) => reason.ruleId))?.includes("behavior.noCookieContinuity"));
   });
 
   test("keeps normal browser navigation low risk", async () => {
@@ -189,21 +178,21 @@ describe("scoring", () => {
       { secret: SECRET, storage: new MemoryBotStorage(() => 1000) },
     );
 
-    expect(result.decision).toBe("allow");
-    expect(result.score).toBe(0);
+    assert.equal(result.decision, "allow");
+    assert.equal(result.score, 0);
   });
 
   test("flags HTTP libraries as automation", async () => {
     const config = { secret: SECRET, storage: new MemoryBotStorage(() => 1000) };
     for (const userAgent of ["python-httpx/0.27", "Go-http-client/1.1", "node", "axios/1.7.2", "Scrapy/2.11", "okhttp/4.12"]) {
       const result = await scoreRequest(new Request("https://example.test/", { headers: { "user-agent": userAgent } }), config);
-      expect(result.reasons.map(reason => reason.ruleId)).toContain("browser.automationUa");
+      assert.ok((result.reasons.map(reason => reason.ruleId))?.includes("browser.automationUa"));
     }
     const browser = await scoreRequest(new Request("https://example.test/", {
       headers: { "user-agent": "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0",
         accept: "text/html", "accept-language": "en", "sec-fetch-mode": "navigate" },
     }), config);
-    expect(browser.reasons).toEqual([]);
+    assert.deepEqual(browser.reasons, []);
   });
 
   test("flags a modern browser user agent without browser headers", async () => {
@@ -212,31 +201,28 @@ describe("scoring", () => {
     const ids = async (url: string, headers: Record<string, string>) =>
       (await scoreRequest(new Request(url, { headers }), config)).reasons.map(reason => reason.ruleId);
 
-    expect(await ids("https://example.test/", { "user-agent": chrome, accept: "*/*" }))
-      .toEqual(["headers.missingFetchMetadata", "headers.missingClientHints"]);
-    expect(await ids("https://example.test/", {
+    assert.deepEqual(await ids("https://example.test/", { "user-agent": chrome, accept: "*/*" }), ["headers.missingFetchMetadata", "headers.missingClientHints"]);
+    assert.deepEqual(await ids("https://example.test/", {
       "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
-    })).toEqual(["headers.missingFetchMetadata"]);
+    }), ["headers.missingFetchMetadata"]);
     // Older browsers and plain HTTP origins cannot send these headers.
-    expect(await ids("https://example.test/", { "user-agent": "Mozilla/5.0 Chrome/70.0 Safari/537.36" })).toEqual([]);
-    expect(await ids("https://example.test/", {
+    assert.deepEqual(await ids("https://example.test/", { "user-agent": "Mozilla/5.0 Chrome/70.0 Safari/537.36" }), []);
+    assert.deepEqual(await ids("https://example.test/", {
       "user-agent": "Mozilla/5.0 (Macintosh) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.3 Safari/605.1.15",
-    })).toEqual([]);
-    expect(await ids("http://example.test/", { "user-agent": chrome })).toEqual([]);
-    expect(await ids("http://127.example.test/", { "user-agent": chrome })).toEqual([]);
+    }), []);
+    assert.deepEqual(await ids("http://example.test/", { "user-agent": chrome }), []);
+    assert.deepEqual(await ids("http://127.example.test/", { "user-agent": chrome }), []);
     // Preflights and old Android WebViews cannot send Client Hints.
-    expect((await scoreRequest(new Request("https://example.test/", {
+    assert.deepEqual((await scoreRequest(new Request("https://example.test/", {
       method: "OPTIONS",
       headers: { "user-agent": chrome, "sec-fetch-mode": "cors", "access-control-request-method": "POST" },
-    }), config)).reasons).toEqual([]);
+    }), config)).reasons, []);
     const webView = (version: number) =>
       `Mozilla/5.0 (Linux; Android 13; Pixel 7; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/${version}.0.0.0 Mobile Safari/537.36`;
-    expect(await ids("https://example.test/", { "user-agent": webView(110), "sec-fetch-mode": "cors" })).toEqual([]);
-    expect(await ids("https://example.test/", { "user-agent": webView(120), "sec-fetch-mode": "cors" }))
-      .toEqual(["headers.missingClientHints"]);
+    assert.deepEqual(await ids("https://example.test/", { "user-agent": webView(110), "sec-fetch-mode": "cors" }), []);
+    assert.deepEqual(await ids("https://example.test/", { "user-agent": webView(120), "sec-fetch-mode": "cors" }), ["headers.missingClientHints"]);
     for (const origin of ["http://localhost:3000/", "http://app.localhost/", "http://127.0.0.2/"]) {
-      expect(await ids(origin, { "user-agent": chrome }))
-        .toEqual(["headers.missingFetchMetadata", "headers.missingClientHints"]);
+      assert.deepEqual(await ids(origin, { "user-agent": chrome }), ["headers.missingFetchMetadata", "headers.missingClientHints"]);
     }
   });
 
@@ -250,16 +236,16 @@ describe("scoring", () => {
     for (let index = 0; index < 181; index += 1) {
       scores.push((await scoreRequest(new Request("https://example.test/search"), config)).score);
     }
-    expect(scores[59]).toBe(0);
-    expect(scores[60]).toBe(35);
-    expect(scores[179]).toBe(35);
-    expect(scores[180]).toBe(65);
-    expect(decisionForScore(scores[180])).toBe("challenge");
+    assert.equal(scores[59], 0);
+    assert.equal(scores[60], 35);
+    assert.equal(scores[179], 35);
+    assert.equal(scores[180], 65);
+    assert.equal(decisionForScore(scores[180]), "challenge");
 
     const disabled = await scoreRequest(new Request("https://example.test/search"), {
       ...config, rules: [...config.rules, { id: "rate.heavyBurst", enabled: false }],
     });
-    expect(disabled.reasons.map(reason => reason.ruleId)).toEqual(["rate.routeBurst"]);
+    assert.deepEqual(disabled.reasons.map(reason => reason.ruleId), ["rate.routeBurst"]);
   });
 
   test("flags many new visitors from one trusted IP", async () => {
@@ -269,16 +255,16 @@ describe("scoring", () => {
       (await scoreRequest(new Request("https://example.test/", { headers }), config)).reasons.map(reason => reason.ruleId);
     let first;
     for (let index = 0; index < 20; index += 1) first = await ids();
-    expect(first).toEqual([]);
-    expect(await ids()).toEqual(["behavior.cookieChurn"]);
+    assert.deepEqual(first, []);
+    assert.deepEqual(await ids(), ["behavior.cookieChurn"]);
     // Preflights cannot carry cookies and are not counted.
     const preflight = await scoreRequest(new Request("https://example.test/", {
       method: "OPTIONS", headers: { "access-control-request-method": "POST" },
     }), { ...config, protectedRoutes: ["/"] });
-    expect(preflight.reasons.map(reason => reason.ruleId)).toEqual([]);
+    assert.deepEqual(preflight.reasons.map(reason => reason.ruleId), []);
     // Returning visitors keep their cookie and are not counted.
     const cookie = `noskrap_visitor=${await signVisitorToken({ id: "v_returning" }, SECRET)}`;
-    expect(await ids({ cookie })).toEqual([]);
+    assert.deepEqual(await ids({ cookie }), []);
   });
 
   test("flags Chromium client hints without a vendor brand", async () => {
@@ -286,10 +272,10 @@ describe("scoring", () => {
     const ids = async (brands: string) => (await scoreRequest(new Request("https://example.test/", {
       headers: { "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36", "sec-fetch-mode": "cors", "sec-ch-ua": brands },
     }), config)).reasons.map(reason => reason.ruleId);
-    expect(await ids('"Chromium";v="141", "Not_A Brand";v="8"')).toEqual(["headers.unbrandedChromium"]);
-    expect(await ids('"Not)A;Brand";v="99", "Chromium";v="141"')).toEqual(["headers.unbrandedChromium"]);
-    expect(await ids('"Google Chrome";v="141", "Not?A_Brand";v="8", "Chromium";v="141"')).toEqual([]);
-    expect(await ids('"Microsoft Edge";v="141", "Chromium";v="141", "Not_A Brand";v="24"')).toEqual([]);
+    assert.deepEqual(await ids('"Chromium";v="141", "Not_A Brand";v="8"'), ["headers.unbrandedChromium"]);
+    assert.deepEqual(await ids('"Not)A;Brand";v="99", "Chromium";v="141"'), ["headers.unbrandedChromium"]);
+    assert.deepEqual(await ids('"Google Chrome";v="141", "Not?A_Brand";v="8", "Chromium";v="141"'), []);
+    assert.deepEqual(await ids('"Microsoft Edge";v="141", "Chromium";v="141", "Not_A Brand";v="24"'), []);
   });
 
   test("adds route burst reason after repeated requests", async () => {
@@ -311,9 +297,7 @@ describe("scoring", () => {
       cookie = result.headers.get("set-cookie")?.split(";")[0] ?? "";
     }
 
-    expect(result?.reasons.map((reason) => reason.ruleId)).toContain(
-      "rate.routeBurst",
-    );
+    assert.ok((result?.reasons.map((reason) => reason.ruleId))?.includes("rate.routeBurst"));
   });
 
   test("does not share an unknown IP rate bucket", async () => {
@@ -327,9 +311,7 @@ describe("scoring", () => {
       );
     }
 
-    expect(result?.reasons.map((reason) => reason.ruleId)).not.toContain(
-      "rate.routeBurst",
-    );
+    assert.ok(!(result?.reasons.map((reason) => reason.ruleId))?.includes("rate.routeBurst"));
   });
 
   test("uses an explicit trusted IP resolver for rate limits", async () => {
@@ -347,9 +329,7 @@ describe("scoring", () => {
       );
     }
 
-    expect(result?.reasons.map((reason) => reason.ruleId)).toContain(
-      "rate.routeBurst",
-    );
+    assert.ok((result?.reasons.map((reason) => reason.ruleId))?.includes("rate.routeBurst"));
   });
 
   test("keeps rate buckets separate per client IP", async () => {
@@ -364,21 +344,15 @@ describe("scoring", () => {
       });
     }
 
-    expect(result?.reasons.map((reason) => reason.ruleId)).not.toContain(
-      "rate.routeBurst",
-    );
+    assert.ok(!(result?.reasons.map((reason) => reason.ruleId))?.includes("rate.routeBurst"));
   });
 
   test("rejects unsafe configuration", async () => {
-    await expect(
-      scoreRequest(new Request("https://example.test/"), { secret: "" }),
-    ).rejects.toThrow("at least 32 characters");
-    await expect(
-      scoreRequest(new Request("https://example.test/"), {
+    await assert.rejects(scoreRequest(new Request("https://example.test/"), { secret: "" }), new RegExp("at least 32 characters"));
+    await assert.rejects(scoreRequest(new Request("https://example.test/"), {
         secret: SECRET,
         thresholds: { observe: 60, challenge: 30, block: 85 },
-      }),
-    ).rejects.toThrow("thresholds");
+      }), new RegExp("thresholds"));
   });
 
   test("scores protected post without recent interaction", async () => {
@@ -397,9 +371,7 @@ describe("scoring", () => {
       { secret: SECRET, protectedRoutes: ["/api/search"], storage },
     );
 
-    expect(result.reasons.map((reason) => reason.ruleId)).toContain(
-      "behavior.noRecentInteraction",
-    );
+    assert.ok((result.reasons.map((reason) => reason.ruleId))?.includes("behavior.noRecentInteraction"));
   });
 
   test("allows protected post after recent interaction", async () => {
@@ -427,9 +399,7 @@ describe("scoring", () => {
       { secret: SECRET, protectedRoutes: ["/api/search"], storage },
     );
 
-    expect(result.reasons.map((reason) => reason.ruleId)).not.toContain(
-      "behavior.noRecentInteraction",
-    );
+    assert.ok(!(result.reasons.map((reason) => reason.ruleId))?.includes("behavior.noRecentInteraction"));
   });
 
   test("scores protected post after stale interaction", async () => {
@@ -465,9 +435,7 @@ describe("scoring", () => {
       },
     );
 
-    expect(result.reasons.map((reason) => reason.ruleId)).toContain(
-      "behavior.noRecentInteraction",
-    );
+    assert.ok((result.reasons.map((reason) => reason.ruleId))?.includes("behavior.noRecentInteraction"));
   });
 });
 
@@ -492,24 +460,22 @@ describe("challenge pass", () => {
       }),
       config,
     );
-    expect(passHeaders).not.toBeNull();
+    assert.notEqual(passHeaders, null);
     const cookie = `${visitorCookie}; ${cookieHeader(passHeaders!)}`;
 
-    expect(
-      await verifyChallengePass(
+    assert.equal(await verifyChallengePass(
         new Request("https://example.test/", { headers: { cookie } }),
         config,
-      ),
-    ).toBe(true);
+      ), true);
 
     const result = await scoreRequest(
       new Request("https://example.test/", { headers: { cookie } }),
       config,
     );
 
-    expect(result.score).toBe(0);
-    expect(result.challengePassed).toBe(true);
-    expect(result.decision).toBe("allow");
+    assert.equal(result.score, 0);
+    assert.equal(result.challengePassed, true);
+    assert.equal(result.decision, "allow");
   });
 
   test("does not allow block decision with valid pass", async () => {
@@ -531,7 +497,7 @@ describe("challenge pass", () => {
       }),
       config,
     );
-    expect(passHeaders).not.toBeNull();
+    assert.notEqual(passHeaders, null);
     const cookie = `${visitorCookie}; ${cookieHeader(passHeaders!)}`;
 
     const result = await scoreRequest(
@@ -541,8 +507,8 @@ describe("challenge pass", () => {
       config,
     );
 
-    expect(result.challengePassed).toBe(false);
-    expect(result.decision).toBe("block");
+    assert.equal(result.challengePassed, false);
+    assert.equal(result.decision, "block");
   });
 
   test("ignores expired and tampered challenge pass", async () => {
@@ -566,34 +532,28 @@ describe("challenge pass", () => {
       }),
       config,
     );
-    expect(passHeaders).not.toBeNull();
+    assert.notEqual(passHeaders, null);
     const cookie = `${visitorCookie}; ${cookieHeader(passHeaders!)}`;
 
     now = 2001;
-    expect(
-      await verifyChallengePass(
+    assert.equal(await verifyChallengePass(
         new Request("https://example.test/", { headers: { cookie } }),
         config,
-      ),
-    ).toBe(false);
+      ), false);
 
-    expect(
-      await verifyChallengePass(
+    assert.equal(await verifyChallengePass(
         new Request("https://example.test/", {
           headers: { cookie: `${cookie}x` },
         }),
         { ...config, now: () => 1000 },
-      ),
-    ).toBe(false);
+      ), false);
   });
 
   test("requires an existing visitor before issuing a pass", async () => {
-    expect(
-      await createChallengePassHeaders(
+    assert.equal(await createChallengePassHeaders(
         new Request("https://example.test/bot-check"),
         { secret: SECRET },
-      ),
-    ).toBeNull();
+      ), null);
   });
 });
 
@@ -618,9 +578,9 @@ describe("scoring regressions", () => {
       const result = await scoreRequest(new Request(`https://example.test${path}`, { method: "POST" }), {
         secret: SECRET, protectedRoutes: [route], storage: new MemoryBotStorage(),
       });
-      expect(result.reasons.some(reason => reason.ruleId === "behavior.noCookieContinuity")).toBe(protectedPath);
+      assert.equal(result.reasons.some(reason => reason.ruleId === "behavior.noCookieContinuity"), protectedPath);
     }
-    await expect(scoreRequest(new Request("https://example.test/"), { secret: SECRET, protectedRoutes: ["checkout"] })).rejects.toThrow("absolute URL paths");
+    await assert.rejects(scoreRequest(new Request("https://example.test/"), { secret: SECRET, protectedRoutes: ["checkout"] }), new RegExp("absolute URL paths"));
   });
 
   test("aggregates dynamic child paths and does not allocate cookie-less state", async () => {
@@ -632,8 +592,8 @@ describe("scoring regressions", () => {
     } };
     let result;
     for (let i = 0; i < 61; i++) result = await scoreRequest(new Request(`https://example.test/api/items/${i}`), configured);
-    expect(result?.reasons.some(reason => reason.ruleId === "rate.routeBurst")).toBe(true);
-    expect(writes).toBe(0);
+    assert.equal(result?.reasons.some(reason => reason.ruleId === "rate.routeBurst"), true);
+    assert.equal(writes, 0);
   });
 
   test("a delayed scorer cannot overwrite verified telemetry", async () => {
@@ -651,12 +611,12 @@ describe("scoring regressions", () => {
     await started;
     try {
       const recorded = await recordTelemetry(new Request("https://example.test/telemetry", { headers: { cookie } }), config, { interacted: true });
-      expect(recorded.visitorId).toBe("v_race");
+      assert.equal(recorded.visitorId, "v_race");
     } finally { release(); }
     await score;
-    expect((await memory.getVisitor("v_race"))?.lastInteractionAt).toBe(1000);
+    assert.equal((await memory.getVisitor("v_race"))?.lastInteractionAt, 1000);
     await recordTelemetry(new Request("https://example.test/telemetry", { headers: { cookie } }), config, { interacted: false });
-    expect((await memory.getVisitor("v_race"))?.lastInteractionAt).toBe(1000);
+    assert.equal((await memory.getVisitor("v_race"))?.lastInteractionAt, 1000);
   });
 
   test("memory updates preserve newest timestamps and isolate returned records", async () => {
@@ -664,9 +624,9 @@ describe("scoring regressions", () => {
     await storage.setVisitor("v_a", { id: "v_a", lastSeen: 200, lastInteractionAt: 200 }, 600);
     await storage.setVisitor("v_a", { id: "v_a", lastSeen: 100, lastInteractionAt: 100 }, 600);
     const visitor = await storage.getVisitor("v_a");
-    expect(visitor).toEqual({ id: "v_a", lastSeen: 200, lastInteractionAt: 200 });
+    assert.deepEqual(visitor, { id: "v_a", lastSeen: 200, lastInteractionAt: 200 });
     visitor!.lastInteractionAt = 0;
-    expect((await storage.getVisitor("v_a"))?.lastInteractionAt).toBe(200);
+    assert.equal((await storage.getVisitor("v_a"))?.lastInteractionAt, 200);
   });
 
   test("storage errors and timeouts mark scoring unavailable", async () => {
@@ -675,21 +635,21 @@ describe("scoring regressions", () => {
         secret: SECRET, storageTimeoutMs: 10, getClientIp: () => "203.0.113.1",
         storage: { getVisitor: async () => null, setVisitor: async () => {}, incrementCounter },
       });
-      expect(result.scoringAvailable).toBe(false);
-      expect(result.reasons.some(reason => reason.ruleId === "rate.routeBurst")).toBe(false);
+      assert.equal(result.scoringAvailable, false);
+      assert.equal(result.reasons.some(reason => reason.ruleId === "rate.routeBurst"), false);
     }
   });
 
   test("Unicode visitor ids round-trip alongside legacy tokens", async () => {
     for (const id of ["用户", "café", "v_🔒"]) {
       const token = await signVisitorToken({ id }, SECRET);
-      expect(await verifyVisitorToken(token, SECRET)).toEqual({ id });
+      assert.deepEqual(await verifyVisitorToken(token, SECRET), { id });
     }
     const body = btoa(JSON.stringify({ id: "café" })).replaceAll("=", "");
     const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
     const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body)));
     const encoded = btoa(String.fromCharCode(...signature)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
-    expect(await verifyVisitorToken(`${body}.${encoded}`, SECRET)).toEqual({ id: "café" });
+    assert.deepEqual(await verifyVisitorToken(`${body}.${encoded}`, SECRET), { id: "café" });
   });
 });
 
@@ -701,15 +661,15 @@ test("interaction boundaries and longest protected route buckets", async () => {
   const cookie = `noskrap_visitor=${await signVisitorToken({ id: "v_boundaries" }, SECRET)}`;
   const request = new Request("https://example.test/api/update", { method: "POST", headers: { cookie, "sec-fetch-mode": "cors" } });
   await recordTelemetry(request, config, { interacted: true });
-  expect((await scoreRequest(request, config)).reasons).toEqual([]);
+  assert.deepEqual((await scoreRequest(request, config)).reasons, []);
   now = -1;
-  expect((await scoreRequest(request, config)).reasons.some(reason => reason.ruleId === "behavior.noRecentInteraction")).toBe(true);
+  assert.equal((await scoreRequest(request, config)).reasons.some(reason => reason.ruleId === "behavior.noRecentInteraction"), true);
   now = 600000;
-  expect((await scoreRequest(request, config)).reasons.some(reason => reason.ruleId === "behavior.noRecentInteraction")).toBe(true);
+  assert.equal((await scoreRequest(request, config)).reasons.some(reason => reason.ruleId === "behavior.noRecentInteraction"), true);
   const keys: string[] = [];
   storage.incrementCounter = async key => { keys.push(key); return 1; };
   await scoreRequest(request, config);
-  expect(keys).toEqual(["visitor:v_boundaries:/api"]);
+  assert.deepEqual(keys, ["visitor:v_boundaries:/api"]);
 });
 
 test("disabled storage rules do not depend on backing services", async () => {
@@ -721,11 +681,11 @@ test("disabled storage rules do not depend on backing services", async () => {
     rules: [{ id: "rate.routeBurst", enabled: false }, { id: "behavior.noRecentInteraction", enabled: false }],
     storage: { getVisitor: fail, setVisitor: fail, incrementCounter: fail },
   });
-  expect(result.scoringAvailable).toBe(true);
-  expect(result.reasons).toEqual([]);
-  await expect(scoreRequest(new Request("https://example.test/"), {
+  assert.equal(result.scoringAvailable, true);
+  assert.deepEqual(result.reasons, []);
+  await assert.rejects(scoreRequest(new Request("https://example.test/"), {
     secret: SECRET, storageTimeoutMs: 2147483648,
-  })).rejects.toThrow("2147483647");
+  }), new RegExp("2147483647"));
 });
 
 test("storage receives request cancellation and deadline signals", async () => {
@@ -742,10 +702,10 @@ test("storage receives request cancellation and deadline signals", async () => {
       },
     },
   };
-  expect((await scoreRequest(new Request("https://example.test/"), config)).scoringAvailable).toBe(false);
-  expect(received?.aborted).toBe(true);
+  assert.equal((await scoreRequest(new Request("https://example.test/"), config)).scoringAvailable, false);
+  assert.equal(received?.aborted, true);
   const parent = new AbortController();
   const pending = scoreRequest(new Request("https://example.test/", { signal: parent.signal }), { ...config, storageTimeoutMs: 1000 });
   parent.abort();
-  expect((await pending).scoringAvailable).toBe(false);
+  assert.equal((await pending).scoringAvailable, false);
 });

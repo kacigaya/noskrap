@@ -1,35 +1,20 @@
-import { expect, mock, test } from "bun:test";
-import { MemoryBotStorage, scoreRequest } from "./core";
+import { NextResponse } from "../tests/next-server.js";
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { MemoryBotStorage, scoreRequest } from "./core.js";
 import {
   createNoSkrapChallengePassHandler,
   createNoSkrapProxy,
   createNoSkrapTelemetryHandler,
   getNoSkrapDecision,
-} from "./next";
+} from "./next.js";
 
 const SECRET = "test-secret-with-at-least-32-bytes";
 
-mock.module("next/server", () => ({
-  NextResponse: {
-    next: (init?: { request?: { headers?: Headers } }) => {
-      const headers = new Headers();
-      if (init?.request?.headers) {
-        headers.set("x-middleware-override-headers", Array.from(init.request.headers.keys()).join(","));
-        init.request.headers.forEach((value, key) => headers.set(`x-middleware-request-${key}`, value));
-      }
-      return new Response(null, { headers });
-    },
-    rewrite: (url: URL, init?: { request?: { headers?: Headers } }) => {
-      const headers = new Headers({ "x-middleware-rewrite": url.href });
-      if (init?.request?.headers) {
-        headers.set("x-middleware-override-headers", Array.from(init.request.headers.keys()).join(","));
-        init.request.headers.forEach((value, key) => headers.set(`x-middleware-request-${key}`, value));
-      }
-      return new Response(null, { headers });
-    },
-    redirect: (url: URL, init?: ResponseInit) => Response.redirect(url, init?.status ?? 307),
-  },
-}));
+if (process.versions.bun) {
+  const { mock } = await import("bun:test");
+  mock.module("next/server", () => ({ NextResponse }));
+}
 
 test("route handler helper returns core decision", async () => {
   const result = await getNoSkrapDecision(
@@ -44,8 +29,8 @@ test("route handler helper returns core decision", async () => {
     { secret: SECRET },
   );
 
-  expect(result.decision).toBe("allow");
-  expect(result.headers.get("set-cookie")).toContain("noskrap_visitor=");
+  assert.equal(result.decision, "allow");
+  assert.ok((result.headers.get("set-cookie"))?.includes("noskrap_visitor="));
 });
 
 test("telemetry handler records interaction and returns cookie", async () => {
@@ -60,8 +45,8 @@ test("telemetry handler records interaction and returns cookie", async () => {
     }),
   );
 
-  expect(response.status).toBe(200);
-  expect(response.headers.get("set-cookie")).toContain("noskrap_visitor=");
+  assert.equal(response.status, 200);
+  assert.ok((response.headers.get("set-cookie"))?.includes("noskrap_visitor="));
 });
 
 test("challenge pass handler returns visitor and challenge cookies", async () => {
@@ -82,8 +67,8 @@ test("challenge pass handler returns visitor and challenge cookies", async () =>
   );
   const cookie = response.headers.get("set-cookie");
 
-  expect(response.status).toBe(200);
-  expect(cookie).toContain("noskrap_challenge=");
+  assert.equal(response.status, 200);
+  assert.ok((cookie)?.includes("noskrap_challenge="));
 });
 
 test("handlers reject unverified client claims", async () => {
@@ -96,25 +81,21 @@ test("handlers reject unverified client claims", async () => {
     verifyChallenge: () => false,
   });
 
-  expect(
-    (
+  assert.equal((
       await telemetry(
         new Request("https://example.test/api/noskrap/telemetry", {
           method: "POST",
           body: JSON.stringify({ interacted: true }),
         }),
       )
-    ).status,
-  ).toBe(401);
-  expect(
-    (
+    ).status, 401);
+  assert.equal((
       await challenge(
         new Request("https://example.test/api/noskrap/challenge-pass", {
           method: "POST",
         }),
       )
-    ).status,
-  ).toBe(401);
+    ).status, 401);
 });
 
 test("proxy reports observed decisions", async () => {
@@ -126,8 +107,8 @@ test("proxy reports observed decisions", async () => {
 
   const response = await proxy(new Request("https://example.test/"));
 
-  expect(response?.status).toBe(200);
-  expect(observations).toEqual([
+  assert.equal(response?.status, 200);
+  assert.deepEqual(observations, [
     {
       decision: "allow",
       score: 0,
@@ -136,8 +117,8 @@ test("proxy reports observed decisions", async () => {
       scoringAvailable: true,
     },
   ]);
-  expect("headers" in observations[0]!).toBe(false);
-  expect(response?.headers.get("set-cookie")).toContain("noskrap_visitor=");
+  assert.equal("headers" in observations[0]!, false);
+  assert.ok((response?.headers.get("set-cookie"))?.includes("noskrap_visitor="));
 });
 
 test("proxy enforces block decisions", async () => {
@@ -154,8 +135,8 @@ test("proxy enforces block decisions", async () => {
     }),
   );
 
-  expect(response?.status).toBe(403);
-  expect(response?.headers.get("set-cookie")).toContain("noskrap_visitor=");
+  assert.equal(response?.status, 403);
+  assert.ok((response?.headers.get("set-cookie"))?.includes("noskrap_visitor="));
 });
 
 test("proxy does not block in observe mode", async () => {
@@ -171,7 +152,7 @@ test("proxy does not block in observe mode", async () => {
     }),
   );
 
-  expect(response?.status).toBe(200);
+  assert.equal(response?.status, 200);
 });
 
 test("proxy redirects challenged visitors and keeps the cookie", async () => {
@@ -189,11 +170,9 @@ test("proxy redirects challenged visitors and keeps the cookie", async () => {
     }),
   );
 
-  expect(response.status).toBe(307);
-  expect(new URL(response!.headers.get("location")!).pathname).toBe(
-    "/bot-check",
-  );
-  expect(response?.headers.get("set-cookie")).toContain("noskrap_visitor=");
+  assert.equal(response.status, 307);
+  assert.equal(new URL(response!.headers.get("location")!).pathname, "/bot-check");
+  assert.ok((response?.headers.get("set-cookie"))?.includes("noskrap_visitor="));
 });
 
 test("proxy lets challenge decisions through without a challenge path", async () => {
@@ -212,9 +191,9 @@ test("proxy lets challenge decisions through without a challenge path", async ()
     }),
   );
 
-  expect(observations[0]?.decision).toBe("challenge");
-  expect(response?.status).toBe(200);
-  expect(response?.headers.get("location")).toBeNull();
+  assert.equal(observations[0]?.decision, "challenge");
+  assert.equal(response?.status, 200);
+  assert.equal(response?.headers.get("location"), null);
 });
 
 test("proxy replaces an invalid visitor cookie", async () => {
@@ -230,8 +209,8 @@ test("proxy replaces an invalid visitor cookie", async () => {
   );
 
   const cookie = response?.headers.get("set-cookie") ?? "";
-  expect(cookie).toContain("noskrap_visitor=");
-  expect(cookie).not.toContain("noskrap_visitor=invalid");
+  assert.ok((cookie)?.includes("noskrap_visitor="));
+  assert.ok(!(cookie)?.includes("noskrap_visitor=invalid"));
 });
 
 test("proxy keeps a valid visitor cookie stable", async () => {
@@ -246,8 +225,8 @@ test("proxy keeps a valid visitor cookie stable", async () => {
     new Request("https://example.test/", { headers: { cookie } }),
   );
 
-  expect(cookie).toContain("noskrap_visitor=");
-  expect(second?.headers.get("set-cookie")?.split(";")[0]).toBe(cookie);
+  assert.ok((cookie)?.includes("noskrap_visitor="));
+  assert.equal(second?.headers.get("set-cookie")?.split(";")[0], cookie);
 });
 
 test("proxy lets challenged visitors reach the challenge page", async () => {
@@ -265,9 +244,9 @@ test("proxy lets challenged visitors reach the challenge page", async () => {
     }),
   );
 
-  expect(response?.status).toBe(200);
-  expect(response?.headers.get("location")).toBeNull();
-  expect(response?.headers.get("set-cookie")).toContain("noskrap_visitor=");
+  assert.equal(response?.status, 200);
+  assert.equal(response?.headers.get("location"), null);
+  assert.ok((response?.headers.get("set-cookie"))?.includes("noskrap_visitor="));
 });
 
 test("proxy still blocks on the challenge page", async () => {
@@ -285,12 +264,12 @@ test("proxy still blocks on the challenge page", async () => {
     }),
   );
 
-  expect(response?.status).toBe(403);
+  assert.equal(response?.status, 403);
 });
 
 function challengeRedirectNext(response: Response | undefined): string {
   const location = response?.headers.get("location");
-  expect(location).not.toBeNull();
+  assert.notEqual(location, null);
   return new URL(location!).searchParams.get("next") ?? "";
 }
 
@@ -309,7 +288,7 @@ test("proxy keeps the query string in the challenge return target", async () => 
     }),
   );
 
-  expect(challengeRedirectNext(response)).toBe("/api/search?q=foo");
+  assert.equal(challengeRedirectNext(response), "/api/search?q=foo");
 });
 
 test("proxy keeps the challenge return target same-origin", async () => {
@@ -329,10 +308,8 @@ test("proxy keeps the challenge return target same-origin", async () => {
 
   const next = challengeRedirectNext(response);
 
-  expect(next).toBe("/evil.com/x");
-  expect(new URL(next, "https://example.test").origin).toBe(
-    "https://example.test",
-  );
+  assert.equal(next, "/evil.com/x");
+  assert.equal(new URL(next, "https://example.test").origin, "https://example.test");
 });
 
 test("telemetry handler rejects an oversized streamed body", async () => {
@@ -350,14 +327,14 @@ test("telemetry handler rejects an oversized streamed body", async () => {
     duplex: "half",
   } as RequestInit);
 
-  expect(request.headers.get("content-length")).toBeNull();
+  assert.equal(request.headers.get("content-length"), null);
 
   const handler = createNoSkrapTelemetryHandler({
     secret: SECRET,
     verifyTelemetry: () => true,
   });
 
-  expect((await handler(request)).status).toBe(413);
+  assert.equal((await handler(request)).status, 413);
 });
 
 test("telemetry handler rejects an oversized declared body", async () => {
@@ -372,7 +349,7 @@ test("telemetry handler rejects an oversized declared body", async () => {
     }),
   );
 
-  expect(response.status).toBe(413);
+  assert.equal(response.status, 413);
 });
 
 test("telemetry handler rejects a body that is not JSON", async () => {
@@ -387,7 +364,7 @@ test("telemetry handler rejects a body that is not JSON", async () => {
     }),
   );
 
-  expect(response.status).toBe(400);
+  assert.equal(response.status, 400);
 });
 
 function forwardedRequest(request: Request, response: Response): Request {
@@ -409,10 +386,10 @@ test("proxy decision is reused with one counter increment and a stable first coo
   const response = await createNoSkrapProxy(config)(request);
   const forwarded = forwardedRequest(request, response);
   const result = await getNoSkrapDecision(forwarded, config);
-  expect(increments).toBe(2); // IP route and new-visitor counters, once each
-  expect(result.score).toBe(15);
-  expect(result.headers.get("set-cookie")).toBe(response.headers.get("set-cookie"));
-  expect(forwarded.headers.get("cookie")).toContain("session=keep");
+  assert.equal(increments, 2); // IP route and new-visitor counters, once each
+  assert.equal(result.score, 15);
+  assert.equal(result.headers.get("set-cookie"), response.headers.get("set-cookie"));
+  assert.ok((forwarded.headers.get("cookie"))?.includes("session=keep"));
 });
 
 test("context binds path, query and a host the proxy saw", async () => {
@@ -422,19 +399,19 @@ test("context binds path, query and a host the proxy saw", async () => {
     headers: { host: "127.0.0.1:3000", "user-agent": "curl/8" },
   });
   const forwarded = forwardedRequest(request, await createNoSkrapProxy(config)(request));
-  const { readContext } = await import("./context");
+  const { readContext } = await import("./context.js");
   // A Server Component rebuilds the URL from the Host header.
   const rebuilt = new Request("https://127.0.0.1:3000/products?page=2", { headers: forwarded.headers });
-  expect((await readContext(rebuilt, config))?.reasons.map(reason => reason.ruleId)).toEqual(["browser.automationUa"]);
-  expect(await readContext(new Request("https://127.0.0.1:3000/products?page=3", { headers: forwarded.headers }), config)).toBeNull();
+  assert.deepEqual((await readContext(rebuilt, config))?.reasons.map(reason => reason.ruleId), ["browser.automationUa"]);
+  assert.equal(await readContext(new Request("https://127.0.0.1:3000/products?page=3", { headers: forwarded.headers }), config), null);
   const otherSite = new Headers(forwarded.headers);
   otherSite.set("host", "tenant-b.example");
-  expect(await readContext(new Request("https://tenant-b.example/products?page=2", { headers: otherSite }), config)).toBeNull();
+  assert.equal(await readContext(new Request("https://tenant-b.example/products?page=2", { headers: otherSite }), config), null);
 });
 
 test("context signing uses an explicit Host when the rebuilt request lost it", async () => {
   const config = { secret: SECRET, storage: new MemoryBotStorage() };
-  const { readContext, signContext } = await import("./context");
+  const { readContext, signContext } = await import("./context.js");
   // Node.js drops Host from `new Request(destination, { headers })`.
   const rebuilt = new Request("http://localhost:3000/api/check");
   const decision = await scoreRequest(rebuilt, config);
@@ -443,7 +420,7 @@ test("context signing uses an explicit Host when the rebuilt request lost it", a
   const handler = new Request("http://localhost:3000/api/check", {
     headers: { host: "127.0.0.1:3000", cookie, "x-noskrap-context": token },
   });
-  expect(await readContext(handler, config)).not.toBeNull();
+  assert.notEqual(await readContext(handler, config), null);
 });
 
 test("contexts reject tampering, changed URL/method/cookie, expiry and wrong secrets", async () => {
@@ -453,29 +430,29 @@ test("contexts reject tampering, changed URL/method/cookie, expiry and wrong sec
   const response = await createNoSkrapProxy(config)(request);
   const forwarded = forwardedRequest(request, response);
   const token = forwarded.headers.get("x-noskrap-context")!;
-  expect(token.length).toBeLessThan(8192);
-  const { readContext } = await import("./context");
-  expect(await readContext(forwarded, config)).not.toBeNull();
+  assert.ok((token.length) < (8192));
+  const { readContext } = await import("./context.js");
+  assert.notEqual(await readContext(forwarded, config), null);
   for (const altered of [
     new Request("https://example.test/other", { headers: forwarded.headers }),
     new Request(forwarded.url, { method: "POST", headers: forwarded.headers }),
     new Request(forwarded.url, { headers: { "x-noskrap-context": token, cookie: "noskrap_visitor=other" } }),
     new Request(forwarded.url, { headers: { ...Object.fromEntries(forwarded.headers), "x-noskrap-context": token + "x" } }),
-  ]) expect(await readContext(altered, config)).toBeNull();
-  expect(await readContext(forwarded, { ...config, secret: "another-secret-with-at-least-32-bytes" })).toBeNull();
+  ]) assert.equal(await readContext(altered, config), null);
+  assert.equal(await readContext(forwarded, { ...config, secret: "another-secret-with-at-least-32-bytes" }), null);
   now += 30000;
-  expect(await readContext(forwarded, config)).toBeNull();
+  assert.equal(await readContext(forwarded, config), null);
 });
 
 test("challenge uses 303 for form POST and structured 403 for fetch requests", async () => {
   const proxy = createNoSkrapProxy({ secret: SECRET, storage: new MemoryBotStorage(), mode: "enforce", challengePath: "/bot-check", thresholds: { observe: 10, challenge: 20, block: 95 } });
   const form = await proxy(new Request("https://example.test/checkout", { method: "POST", body: "private=form", headers: { "user-agent": "HeadlessChrome", "sec-fetch-mode": "navigate", accept: "text/html" } }));
-  expect(form.status).toBe(303);
+  assert.equal(form.status, 303);
   for (const method of ["POST", "GET"]) {
     const response = await proxy(new Request("https://example.test/checkout", { method, headers: { "user-agent": "HeadlessChrome", "sec-fetch-mode": "cors" } }));
-    expect(response.status).toBe(403);
-    expect(response.headers.get("location")).toBeNull();
-    expect((await response.json()).challengeUrl).toContain("/bot-check?next=");
+    assert.equal(response.status, 403);
+    assert.equal(response.headers.get("location"), null);
+    assert.ok(((await response.json()).challengeUrl)?.includes("/bot-check?next="));
   }
 });
 
@@ -483,9 +460,9 @@ test("recovery bypass is exact and removes client-supplied contexts", async () =
   const proxy = createNoSkrapProxy({ secret: SECRET, mode: "enforce", protectedRoutes: ["/"], recoveryRoutes: ["/api/pass/"] });
   const init = { method: "POST", headers: { "user-agent": "curl/8", "x-noskrap-context": "forged" } };
   const bypass = await proxy(new Request("https://example.test/api/pass", init));
-  expect(bypass.status).toBe(200);
-  expect(bypass.headers.get("x-middleware-request-x-noskrap-context")).toBeNull();
-  expect((await proxy(new Request("https://example.test/api/pass/child", init))).status).toBe(403);
+  assert.equal(bypass.status, 200);
+  assert.equal(bypass.headers.get("x-middleware-request-x-noskrap-context"), null);
+  assert.equal((await proxy(new Request("https://example.test/api/pass/child", init))).status, 403);
 });
 
 test("outage defaults are open in observe and closed in enforce, with explicit override", async () => {
@@ -493,7 +470,7 @@ test("outage defaults are open in observe and closed in enforce, with explicit o
   storage.incrementCounter = async () => { throw new Error("offline"); };
   for (const [mode, storageFailureMode, status] of [["observe", undefined, 200], ["enforce", undefined, 503], ["enforce", "open", 200], ["observe", "closed", 503]] as const) {
     const proxy = createNoSkrapProxy({ secret: SECRET, storage, getClientIp: () => "trusted", mode, storageFailureMode });
-    expect((await proxy(new Request("https://example.test/"))).status).toBe(status);
+    assert.equal((await proxy(new Request("https://example.test/"))).status, status);
   }
 });
 
@@ -502,11 +479,11 @@ test("telemetry verifier receives capped raw bytes and failed writes return 503"
   const storage = new MemoryBotStorage();
   storage.setVisitor = async () => { throw new Error("offline"); };
   const handler = createNoSkrapTelemetryHandler({ secret: SECRET, storage, verifyTelemetry: (_request, _payload, body) => new TextDecoder().decode(body) === raw });
-  expect((await handler(new Request("https://example.test/telemetry", { method: "POST", body: raw }))).status).toBe(503);
+  assert.equal((await handler(new Request("https://example.test/telemetry", { method: "POST", body: raw }))).status, 503);
   const challenge = createNoSkrapChallengePassHandler({ secret: SECRET, verifyChallenge: () => true });
   const response = await challenge(new Request("https://example.test/pass"));
-  expect(response.status).toBe(405);
-  expect(response.headers.get("allow")).toBe("POST");
+  assert.equal(response.status, 405);
+  assert.equal(response.headers.get("allow"), "POST");
 });
 
 test("verification deadlines cancel work without issuing cookies or writes", async () => {
@@ -529,15 +506,15 @@ test("verification deadlines cancel work without issuing cookies or writes", asy
   ];
   for (const handler of handlers) {
     const response = await handler(new Request("https://example.test/api/proof", { method: "POST", body: '{"interacted":true}' }));
-    expect(response.status).toBe(503);
-    expect(response.headers.has("set-cookie")).toBe(false);
-    expect(received?.aborted).toBe(true);
+    assert.equal(response.status, 503);
+    assert.equal(response.headers.has("set-cookie"), false);
+    assert.equal(received?.aborted, true);
   }
-  expect(writes).toBe(0);
+  assert.equal(writes, 0);
   const failed = createNoSkrapChallengePassHandler({ secret: SECRET, verifyChallenge: () => { throw new Error("secret provider error"); } });
   const response = await failed(new Request("https://example.test/", { method: "POST" }));
-  expect(response.status).toBe(503);
-  expect(await response.text()).not.toContain("secret provider error");
+  assert.equal(response.status, 503);
+  assert.ok(!(await response.text())?.includes("secret provider error"));
 });
 
 test("observer timeout preserves enforcement and cancels stalled logging", async () => {
@@ -548,8 +525,8 @@ test("observer timeout preserves enforcement and cancels stalled logging", async
     const proxy = createNoSkrapProxy({ secret: SECRET, mode: "enforce", onDecisionTimeoutMs: 10,
       thresholds: { observe: 1, challenge: 2, block: 3 },
       onDecision: (_result, _request, signal) => { received = signal; return new Promise<void>(() => {}); } });
-    expect((await proxy(new Request("https://example.test/", { headers: { "user-agent": "curl" } }))).status).toBe(403);
-    expect(received?.aborted).toBe(true);
+    assert.equal((await proxy(new Request("https://example.test/", { headers: { "user-agent": "curl" } }))).status, 403);
+    assert.equal(received?.aborted, true);
   } finally { console.error = log; }
 });
 
@@ -559,13 +536,14 @@ test("slow telemetry streams are cancelled before verification", async () => {
   const body = new ReadableStream<Uint8Array>({ cancel() { cancelled = true; } });
   const handler = createNoSkrapTelemetryHandler({ secret: SECRET, verificationTimeoutMs: 10,
     verifyTelemetry: () => { verified = true; return true; } });
-  const response = await handler(new Request("https://example.test/", { method: "POST", body }));
-  expect(response.status).toBe(408);
-  expect(cancelled).toBe(true);
-  expect(verified).toBe(false);
+  const init = { method: "POST", body, duplex: "half" };
+  const response = await handler(new Request("https://example.test/", init));
+  assert.equal(response.status, 408);
+  assert.equal(cancelled, true);
+  assert.equal(verified, false);
   for (const value of [0, NaN, Infinity]) {
-    expect(() => createNoSkrapTelemetryHandler({ secret: SECRET, verificationTimeoutMs: value, verifyTelemetry: () => true })).toThrow("verificationTimeoutMs");
-    expect(() => createNoSkrapProxy({ secret: SECRET, onDecisionTimeoutMs: value })).toThrow("onDecisionTimeoutMs");
+    assert.throws(() => createNoSkrapTelemetryHandler({ secret: SECRET, verificationTimeoutMs: value, verifyTelemetry: () => true }), new RegExp("verificationTimeoutMs"));
+    assert.throws(() => createNoSkrapProxy({ secret: SECRET, onDecisionTimeoutMs: value }), new RegExp("onDecisionTimeoutMs"));
   }
 });
 
@@ -580,18 +558,18 @@ test("rewrites score and bind the destination without a second increment", async
     rewrite: original => new URL(original.url).pathname === "/public"
       ? new URL(`/api/check${new URL(original.url).search}`, original.url) : null });
   const response = await proxy(request);
-  expect(response.headers.get("x-middleware-rewrite")).toBe("https://example.test/api/check?keep=1");
+  assert.equal(response.headers.get("x-middleware-rewrite"), "https://example.test/api/check?keep=1");
   const forwarded = forwardedRequest(request, response);
   const rewritten = new Request(response.headers.get("x-middleware-rewrite")!, { method: "POST", headers: forwarded.headers });
   const secondPass = await proxy(rewritten);
   const result = await getNoSkrapDecision(forwardedRequest(rewritten, secondPass), config);
-  expect(observations).toBe(1);
-  expect(result.reasons.some(reason => reason.ruleId === "behavior.noRecentInteraction")).toBe(true);
-  expect(increments).toBe(2); // IP route and new-visitor counters, once each
-  const { readContext } = await import("./context");
-  expect(await readContext(forwarded, config)).toBeNull();
-  expect(await readContext(new Request("https://example.test/unrelated", { method: "POST", headers: forwarded.headers }), config)).toBeNull();
-  await expect(createNoSkrapProxy({ ...config, rewrite: () => new URL("https://other.test/api") })(request)).rejects.toThrow("same-origin");
+  assert.equal(observations, 1);
+  assert.equal(result.reasons.some(reason => reason.ruleId === "behavior.noRecentInteraction"), true);
+  assert.equal(increments, 2); // IP route and new-visitor counters, once each
+  const { readContext } = await import("./context.js");
+  assert.equal(await readContext(forwarded, config), null);
+  assert.equal(await readContext(new Request("https://example.test/unrelated", { method: "POST", headers: forwarded.headers }), config), null);
+  await assert.rejects(createNoSkrapProxy({ ...config, rewrite: () => new URL("https://other.test/api") })(request), new RegExp("same-origin"));
 });
 
 test("configured context lifetime supports delayed handlers and remains bounded", async () => {
@@ -603,9 +581,9 @@ test("configured context lifetime supports delayed handlers and remains bounded"
   const forwarded = forwardedRequest(request, await createNoSkrapProxy(config)(request));
   now += 31_000;
   await getNoSkrapDecision(forwarded, config);
-  expect(increments).toBe(2); // IP route and new-visitor counters, once each
-  const { readContext } = await import("./context");
+  assert.equal(increments, 2); // IP route and new-visitor counters, once each
+  const { readContext } = await import("./context.js");
   now += 29_000;
-  expect(await readContext(forwarded, config)).toBeNull();
-  expect(() => createNoSkrapProxy({ ...config, contextTtlMs: 300_001 })).toThrow("300000");
+  assert.equal(await readContext(forwarded, config), null);
+  assert.throws(() => createNoSkrapProxy({ ...config, contextTtlMs: 300_001 }), new RegExp("300000"));
 });

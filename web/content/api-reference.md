@@ -9,7 +9,8 @@ NoSkrap exports four entrypoints.
 | `createNoSkrapProxy(config)` | Creates a Next.js proxy or middleware function. |
 | `getNoSkrapDecision(request, config)` | Reuses verified proxy context, otherwise scores directly. |
 | `createNoSkrapTelemetryHandler(config)` | Requires `verifyTelemetry(request, payload, rawBody)`. |
-| `createNoSkrapChallengePassHandler(config)` | Requires `verifyChallenge(request)`. Accepts POST only. |
+| `createNoSkrapChallengePassHandler(config)` | Requires `verifyChallenge(request, signal)`. Accepts POST only. |
+| `createTurnstileVerifier(options)` | Creates a challenge verifier using `secretKey`, required `expectedHostname`, and optional `expectedAction`. Accepts JSON `{ token }`. |
 
 ## `noskrap/core`
 
@@ -38,7 +39,10 @@ NoSkrap exports four entrypoints.
 
 ## `noskrap/client`
 
-`showBotDetectedPopup(result, options?)` shows a popup for configured decisions.
+| API | Description |
+| --- | --- |
+| `showBotDetectedPopup(result, options?)` | Shows a popup for configured decisions. |
+| `startNoSkrapBeacon({ token, endpoint? })` | Sends signed interaction telemetry at most every five minutes. Returns a cleanup function. |
 
 ## Storage
 
