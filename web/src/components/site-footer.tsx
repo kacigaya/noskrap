@@ -2,6 +2,7 @@ import Link from "next/link";
 
 const DOCS_URL = "/docs";
 const GITHUB_URL = "https://github.com/kacigaya/noskrap";
+const NPM_URL = "https://www.npmjs.com/package/noskrap";
 
 export function SiteFooter() {
   return (
@@ -17,6 +18,9 @@ export function SiteFooter() {
           </Link>
           <a href={GITHUB_URL} className="hover:text-foreground">
             GitHub
+          </a>
+          <a href={NPM_URL} className="hover:text-foreground">
+            npm
           </a>
           <Link href="/privacy" className="hover:text-foreground">
             Privacy
