@@ -11,7 +11,7 @@ import {
   scoreRequest,
   validateConfig,
 } from "./core.js";
-import { CONTEXT_HEADER, readContext, signContext } from "./context.js";
+import { CONTEXT_HEADER, readContext, readPageContext, signContext } from "./context.js";
 
 export type NoSkrapObservation = Pick<
   BotResult,
@@ -62,6 +62,18 @@ export async function getNoSkrapDecision(
 ): Promise<BotResult> {
   validateConfig(config);
   return (await readContext(request, config)) ?? scoreRequest(request, config);
+}
+
+export async function getNoSkrapPageDecision(pathname: string, config: NoSkrapConfig): Promise<BotResult> {
+  validateConfig(config);
+  if (typeof pathname !== "string" || !pathname.startsWith("/") || pathname.startsWith("//") ||
+    /[?#\\\u0000-\u0020]/.test(pathname) || new URL(pathname, "https://noskrap.invalid").pathname !== pathname) {
+    throw new TypeError("pathname must be an absolute URL path without a query or fragment");
+  }
+  const { headers } = await import("next/headers");
+  const result = await readPageContext(new Headers(await headers()), pathname, config);
+  if (!result) throw new Error("Page decision requires a matching, current NoSkrap proxy context");
+  return result;
 }
 
 export function createNoSkrapProxy(config: NoSkrapProxyConfig) {
