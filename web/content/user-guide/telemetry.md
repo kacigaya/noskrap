@@ -30,7 +30,11 @@ request cookie. `verifyTelemetryToken(request, config, options?)` accepts the
 1. The token is signed with one of your secrets.
 2. The token belongs to the visitor in the request cookie.
 3. The token is at least `minAgeMs` old (default 0).
-4. The token is less than `maxAgeMs` old (default 10 minutes).
+4. The token is less than `maxAgeMs` old (default 24 hours).
+
+The long default lets a layout stay mounted across client navigation. A
+shorter lifetime does not stop scrapers, because they can load a page to get
+a fresh token.
 
 The token proves that the visitor loaded a page you rendered. It does not
 prove that a human used the page. A scraper that reads the token from the page

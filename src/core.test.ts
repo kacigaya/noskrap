@@ -65,8 +65,10 @@ describe("telemetry token", () => {
     expect(scored.visitorId).not.toBe("v_one");
     expect(scored.reasons.map(reason => reason.ruleId)).toContain("behavior.noCookieContinuity");
     now += 10 * 60 * 1000;
+    expect(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token })).toBe(true);
+    expect(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token }, { maxAgeMs: 10 * 60 * 1000 })).toBe(false);
+    now += 24 * 60 * 60 * 1000;
     expect(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token })).toBe(false);
-    expect(await verify({ cookie, [TELEMETRY_TOKEN_HEADER]: token }, { maxAgeMs: 20 * 60 * 1000 })).toBe(true);
     await expect(verify({ cookie }, { minAgeMs: 5, maxAgeMs: 5 })).rejects.toThrow(TypeError);
   });
 });

@@ -101,7 +101,10 @@ const AUTOMATION_UA = new RegExp([
 ].join("|"), "i");
 const INTERACTION_TTL_MS = 10 * 60 * 1000;
 const MIN_SECRET_LENGTH = 32;
-const TELEMETRY_TOKEN_MAX_AGE_MS = 10 * 60 * 1000;
+// Layouts stay mounted across client navigation, so a beacon can hold its
+// token for hours. The token is visitor-bound and a scraper can fetch a fresh
+// one from any page, so a short lifetime would only break long sessions.
+const TELEMETRY_TOKEN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 export const TELEMETRY_TOKEN_HEADER = "x-noskrap-telemetry";
 let defaultMemoryStorage: MemoryBotStorage | undefined;
 let warnedAboutDefaultStorage = false;
@@ -338,7 +341,7 @@ export interface TelemetryTokenOptions {
   // Reject tokens younger than this. Defaults to 0: real visitors can click
   // within a second, and a scraper can wait out any minimum.
   minAgeMs?: number;
-  // Defaults to 10 minutes.
+  // Defaults to 24 hours.
   maxAgeMs?: number;
 }
 
