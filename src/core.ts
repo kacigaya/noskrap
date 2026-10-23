@@ -83,6 +83,19 @@ const CHALLENGE_COOKIE = "noskrap_challenge";
 const VISITOR_TTL_SECONDS = 60 * 60 * 24 * 30;
 const CHALLENGE_TTL_SECONDS = 10 * 60;
 const RATE_WINDOW_SECONDS = 60;
+const IP_BURST_LIMIT = 60;
+const VISITOR_BURST_LIMIT = 30;
+// A heavy burst alone must reach the default challenge band (35 + 30 = 65).
+const HEAVY_BURST_FACTOR = 3;
+// HTTP libraries and automation tools. Declared crawlers are not listed so
+// search engines keep their reputation; score them with your own rules.
+const AUTOMATION_UA = new RegExp([
+  "HeadlessChrome", "PhantomJS", "Puppeteer", "Playwright", "curl", "wget",
+  "python-requests", "python-urllib", "python-httpx", "aiohttp", "Scrapy",
+  "Go-http-client", "node-fetch", "undici", "axios/", "okhttp",
+  "Apache-HttpClient", "libwww-perl", "PostmanRuntime", "^Java/", "^node$",
+  "^Bun/", "^Deno/",
+].join("|"), "i");
 const INTERACTION_TTL_MS = 10 * 60 * 1000;
 const MIN_SECRET_LENGTH = 32;
 let defaultMemoryStorage: MemoryBotStorage | undefined;
@@ -126,8 +139,20 @@ export async function scoreRequest(
     addReason("headers.missingBrowserHeaders", 25);
   }
 
-  if (/HeadlessChrome|curl|wget|python-requests/i.test(userAgent)) {
+  if (AUTOMATION_UA.test(userAgent)) {
     addReason("browser.automationUa", 30);
+  }
+
+  // Browsers send these headers only to potentially trustworthy origins, so
+  // plain HTTP deployments skip the checks instead of flagging every visitor.
+  if (isTrustworthyOrigin(url)) {
+    const browser = claimedBrowser(userAgent);
+    if (browser && !secFetchMode) {
+      addReason("headers.missingFetchMetadata", 25);
+    }
+    if (browser === "chromium" && !headers.has("sec-ch-ua")) {
+      addReason("headers.missingClientHints", 15);
+    }
   }
 
   if (
@@ -150,6 +175,8 @@ export async function scoreRequest(
     addReason("behavior.noCookieContinuity", 15);
   }
 
+  // rate.heavyBurst escalates rate.routeBurst; disabling the base rule stops
+  // counting altogether.
   const rateEnabled = ruleScore(config, "rate.routeBurst", 35) > 0;
   const interactionEnabled = ruleScore(config, "behavior.noRecentInteraction", 30) > 0;
   const ip = rateEnabled ? config.getClientIp?.(request)?.trim() : undefined;
@@ -174,7 +201,15 @@ export async function scoreRequest(
     ) {
       addReason("behavior.noRecentInteraction", 30);
     }
-    if (ipCount > 60 || visitorCount > 30) addReason("rate.routeBurst", 35);
+    if (ipCount > IP_BURST_LIMIT || visitorCount > VISITOR_BURST_LIMIT) {
+      addReason("rate.routeBurst", 35);
+    }
+    if (
+      ipCount > IP_BURST_LIMIT * HEAVY_BURST_FACTOR ||
+      visitorCount > VISITOR_BURST_LIMIT * HEAVY_BURST_FACTOR
+    ) {
+      addReason("rate.heavyBurst", 30);
+    }
   } catch (error) {
     if (!(error instanceof BotStorageError)) throw error;
     scoringAvailable = false;
@@ -474,6 +509,29 @@ function isHtmlNavigation(request: Request): boolean {
     request.method === "GET" &&
     (accept.includes("text/html") || mode === "navigate")
   );
+}
+
+function isTrustworthyOrigin(url: URL): boolean {
+  const host = url.hostname;
+  return url.protocol === "https:" || host === "localhost" ||
+    host.endsWith(".localhost") || host === "[::1]" || /^127\./.test(host);
+}
+
+// Versions that send Sec-Fetch-* (Chromium 80, Firefox 90, Safari 16.4) and,
+// for Chromium, Sec-CH-UA (89). Older or unknown agents return null so the
+// header checks never penalize a browser that cannot send them.
+function claimedBrowser(userAgent: string): "chromium" | "firefox" | "safari" | null {
+  const chromium = /(?:Chrome|Chromium)\/(\d+)/.exec(userAgent);
+  if (chromium) return Number(chromium[1]) >= 89 ? "chromium" : null;
+  const firefox = /Firefox\/(\d+)/.exec(userAgent);
+  if (firefox) return Number(firefox[1]) >= 90 ? "firefox" : null;
+  const safari = /Version\/(\d+)(?:\.(\d+))?.*Safari\//.exec(userAgent);
+  if (safari && !/CriOS|FxiOS|EdgiOS/.test(userAgent)) {
+    const major = Number(safari[1]);
+    const minor = Number(safari[2] ?? 0);
+    return major > 16 || (major === 16 && minor >= 4) ? "safari" : null;
+  }
+  return null;
 }
 
 function isUnsafeMethod(method: string): boolean {
