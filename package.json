@@ -24,6 +24,10 @@
     "./redis": {
       "types": "./dist/redis.d.ts",
       "default": "./dist/redis.js"
+    },
+    "./crawlers": {
+      "types": "./dist/crawlers.d.ts",
+      "default": "./dist/crawlers.js"
     }
   },
   "files": [
