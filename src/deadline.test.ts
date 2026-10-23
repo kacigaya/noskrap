@@ -1,31 +1,32 @@
-import { expect, test } from "bun:test";
-import { withDeadline } from "./deadline";
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { withDeadline } from "./deadline.js";
 
 test("deadline cancels cooperative work and handles a late rejection", async () => {
   let received: AbortSignal | undefined;
-  await expect(withDeadline(signal => {
+  await assert.rejects(withDeadline(signal => {
     received = signal;
     return new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
-  }, 10)).rejects.toThrow("timed out");
-  expect(received?.aborted).toBe(true);
+  }, 10), new RegExp("timed out"));
+  assert.equal(received?.aborted, true);
 });
 
 test("request cancellation prevents starting work", async () => {
   const parent = new AbortController();
   parent.abort(new Error("disconnected"));
   let started = false;
-  await expect(withDeadline(() => { started = true; }, 1000, parent.signal)).rejects.toThrow("disconnected");
-  expect(started).toBe(false);
+  await assert.rejects(withDeadline(() => { started = true; }, 1000, parent.signal), new RegExp("disconnected"));
+  assert.equal(started, false);
 });
 
 test("failure cancels siblings; success clears deadline", async () => {
   let failed: AbortSignal | undefined;
-  await expect(withDeadline(signal => { failed = signal; throw new Error("failed"); }, 100)).rejects.toThrow("failed");
-  expect(failed?.aborted).toBe(true);
+  await assert.rejects(withDeadline(signal => { failed = signal; throw new Error("failed"); }, 100), new RegExp("failed"));
+  assert.equal(failed?.aborted, true);
   let succeeded: AbortSignal | undefined;
-  expect(await withDeadline(signal => { succeeded = signal; return 42; }, 10)).toBe(42);
-  await Bun.sleep(20);
-  expect(succeeded?.aborted).toBe(false);
+  assert.equal(await withDeadline(signal => { succeeded = signal; return 42; }, 10), 42);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(succeeded?.aborted, false);
 });
 
 test("in-flight request cancellation reaches work and success removes listeners", async () => {
@@ -40,10 +41,10 @@ test("in-flight request cancellation reaches work and success removes listeners"
   }, 1000, parent.signal);
   await started;
   parent.abort(new Error("disconnected"));
-  await expect(pending).rejects.toThrow("disconnected");
-  expect(received?.aborted).toBe(true);
+  await assert.rejects(pending, new RegExp("disconnected"));
+  assert.equal(received?.aborted, true);
   const completed = new AbortController();
   await withDeadline(signal => { received = signal; }, 1000, completed.signal);
   completed.abort();
-  expect(received?.aborted).toBe(false);
+  assert.equal(received?.aborted, false);
 });

@@ -1,5 +1,6 @@
-import { expect, test } from "bun:test";
-import { MemoryBotStorage } from "./core";
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { MemoryBotStorage } from "./core.js";
 
 const SECRET = "test-secret-with-at-least-32-bytes";
 
@@ -7,9 +8,9 @@ const SECRET = "test-secret-with-at-least-32-bytes";
 // gives each test its own copy of the module state, so these stay independent
 // of each other and of whatever the rest of the suite already triggered.
 let moduleCounter = 0;
-async function freshCore(): Promise<typeof import("./core")> {
+async function freshCore(): Promise<typeof import("./core.js")> {
   moduleCounter += 1;
-  return import(`./core.ts?storage-warning=${moduleCounter}`);
+  return import(`./core.js?storage-warning=${moduleCounter}`);
 }
 
 function captureWarnings(): { messages: string[]; restore: () => void } {
@@ -33,8 +34,8 @@ test("warns when no storage is configured", async () => {
     warnings.restore();
   }
 
-  expect(warnings.messages).toHaveLength(1);
-  expect(warnings.messages[0]).toContain("no `storage` configured");
+  assert.equal((warnings.messages).length, 1);
+  assert.ok((warnings.messages[0])?.includes("no `storage` configured"));
 });
 
 test("warns only once across repeated calls", async () => {
@@ -51,7 +52,7 @@ test("warns only once across repeated calls", async () => {
     warnings.restore();
   }
 
-  expect(warnings.messages).toHaveLength(1);
+  assert.equal((warnings.messages).length, 1);
 });
 
 test("does not warn when storage is supplied", async () => {
@@ -67,5 +68,5 @@ test("does not warn when storage is supplied", async () => {
     warnings.restore();
   }
 
-  expect(warnings.messages).toEqual([]);
+  assert.deepEqual(warnings.messages, []);
 });

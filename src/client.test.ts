@@ -1,5 +1,6 @@
-import { afterEach, expect, test } from "bun:test";
-import { showBotDetectedPopup, startNoSkrapBeacon } from "./client";
+import assert from "node:assert/strict";
+import { afterEach, test } from "node:test";
+import { showBotDetectedPopup, startNoSkrapBeacon } from "./client.js";
 
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 const originalFetch = globalThis.fetch;
@@ -40,11 +41,11 @@ function browser() {
 test("beacon sends only trusted interactions and includes the signed token", () => {
   const { fire, requests } = browser();
   const stop = startNoSkrapBeacon({ token: "signed-token" });
-  expect(requests.length).toBe(0);
+  assert.equal(requests.length, 0);
   fire("pointerdown", false);
-  expect(requests.length).toBe(0);
+  assert.equal(requests.length, 0);
   fire("keydown");
-  expect(requests).toEqual([{
+  assert.deepEqual(requests, [{
     input: "/api/noskrap/telemetry",
     init: {
       method: "POST", credentials: "same-origin",
@@ -63,21 +64,21 @@ test("beacon keeps listeners and resends on interaction after five minutes", () 
   fire("pointerdown");
   now = 299999;
   fire("keydown");
-  expect(requests.length).toBe(1);
+  assert.equal(requests.length, 1);
   now = 300000;
   fire("keydown");
-  expect(requests.length).toBe(2);
+  assert.equal(requests.length, 2);
   now = 600000;
   fire("pointerdown");
-  expect(requests.length).toBe(3);
+  assert.equal(requests.length, 3);
   stop();
   stop();
   now = 900000;
   fire("pointerdown");
   fire("keydown");
-  expect(requests.length).toBe(3);
-  expect(listeners.get("pointerdown")?.size).toBe(0);
-  expect(listeners.get("keydown")?.size).toBe(0);
+  assert.equal(requests.length, 3);
+  assert.equal(listeners.get("pointerdown")?.size, 0);
+  assert.equal(listeners.get("keydown")?.size, 0);
 });
 
 test("beacon supports cleanup and remount with a new token and custom path", () => {
@@ -85,9 +86,9 @@ test("beacon supports cleanup and remount with a new token and custom path", () 
   startNoSkrapBeacon({ token: "old-token" })();
   const stop = startNoSkrapBeacon({ token: "new-token", endpoint: "/base/telemetry" });
   fire("pointerdown");
-  expect(requests.length).toBe(1);
-  expect(requests[0].input).toBe("/base/telemetry");
-  expect(new Headers(requests[0].init?.headers).get("x-noskrap-telemetry")).toBe("new-token");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].input, "/base/telemetry");
+  assert.equal(new Headers(requests[0].init?.headers).get("x-noskrap-telemetry"), "new-token");
   stop();
 });
 
@@ -102,9 +103,9 @@ test("beacon handles transport rejection without interrupting interaction", asyn
 
 test("beacon rejects empty tokens and endpoints that can leak the token", () => {
   browser();
-  expect(() => startNoSkrapBeacon({ token: "" })).toThrow(TypeError);
+  assert.throws(() => startNoSkrapBeacon({ token: "" }), TypeError);
   for (const endpoint of ["https://other.test/", "//other.test/", "/\\other.test/", "relative", "/ path", "/path#fragment", "/\n/other.test"]) {
-    expect(() => startNoSkrapBeacon({ token: "signed-token", endpoint })).toThrow(TypeError);
+    assert.throws(() => startNoSkrapBeacon({ token: "signed-token", endpoint }), TypeError);
   }
 });
 
@@ -118,28 +119,26 @@ test("shows popup for challenge and block decisions", () => {
   const messages: string[] = [];
   const show = (message: string) => messages.push(message);
 
-  expect(showBotDetectedPopup("challenge", { show })).toBe(true);
-  expect(showBotDetectedPopup({ decision: "block" }, { show })).toBe(true);
-  expect(messages).toEqual(["Bot detected.", "Bot detected."]);
+  assert.equal(showBotDetectedPopup("challenge", { show }), true);
+  assert.equal(showBotDetectedPopup({ decision: "block" }, { show }), true);
+  assert.deepEqual(messages, ["Bot detected.", "Bot detected."]);
 });
 
 test("does not show popup for allow or observe decisions", () => {
   const messages: string[] = [];
   const show = (message: string) => messages.push(message);
 
-  expect(showBotDetectedPopup("allow", { show })).toBe(false);
-  expect(showBotDetectedPopup({ decision: "observe" }, { show })).toBe(false);
-  expect(messages).toEqual([]);
+  assert.equal(showBotDetectedPopup("allow", { show }), false);
+  assert.equal(showBotDetectedPopup({ decision: "observe" }, { show }), false);
+  assert.deepEqual(messages, []);
 });
 
 test("uses custom message", () => {
   const messages: string[] = [];
 
-  expect(
-    showBotDetectedPopup("block", {
+  assert.equal(showBotDetectedPopup("block", {
       message: "Suspicious traffic detected.",
       show: (message) => messages.push(message),
-    }),
-  ).toBe(true);
-  expect(messages).toEqual(["Suspicious traffic detected."]);
+    }), true);
+  assert.deepEqual(messages, ["Suspicious traffic detected."]);
 });

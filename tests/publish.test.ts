@@ -1,6 +1,8 @@
-import { expect, test } from "bun:test";
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -10,14 +12,14 @@ test("release upload passes a local tarball to npm", async () => {
     await mkdir(join(directory, "fixture/package"), { recursive: true });
     await mkdir(join(directory, "package"));
     await writeFile(join(directory, "fixture/package/package.json"), JSON.stringify({ name: "noskrap-release-fixture", version: "1.0.0" }));
-    const archive = Bun.spawn(["tar", "-czf", join(directory, "package/noskrap-1.0.0.tgz"), "package"],
-      { cwd: join(directory, "fixture"), stderr: "inherit" });
-    expect(await archive.exited).toBe(0);
-    const workflow = await Bun.file(join(import.meta.dir, "../.github/workflows/publish.yml")).text();
+    const archive = spawnSync("tar", ["-czf", join(directory, "package/noskrap-1.0.0.tgz"), "package"],
+      { cwd: join(directory, "fixture"), encoding: "utf8" });
+    assert.equal(archive.status, 0, archive.stderr);
+    const workflow = await readFile(".github/workflows/publish.yml", "utf8");
     const start = workflow.indexOf("          shopt -s nullglob\n");
     const end = workflow.indexOf("          export NOSKRAP_RELEASE_ARCHIVE=", start);
-    expect(start).toBeGreaterThan(-1);
-    expect(end).toBeGreaterThan(start);
+    assert.ok((start) > (-1));
+    assert.ok((end) > (start));
     const upload = workflow.slice(start, end).replace(/^          /gm, "");
     // Exercise the real upload shell and npm parser without publishing or
     // contacting the registry. Reject GitHub shorthand before npm can use git.
@@ -26,15 +28,13 @@ test("release upload passes a local tarball to npm", async () => {
       command npm "$@" --dry-run --ignore-scripts --offline --json
     }
     ${upload}`;
-    const process = Bun.spawn(["bash", "-e", "-o", "pipefail", "-c", script], {
+    const child = spawnSync("bash", ["-e", "-o", "pipefail", "-c", script], {
       cwd: directory, env: { ...globalThis.process.env, npm_config_cache: join(directory, "cache"), npm_config_userconfig: "/dev/null" },
-      stdout: "pipe", stderr: "pipe",
+      encoding: "utf8",
     });
-    const [exit, output, errors] = await Promise.all([
-      process.exited, new Response(process.stdout).text(), new Response(process.stderr).text(),
-    ]);
-    expect(exit, errors).toBe(0);
-    expect(output).toContain('"id": "noskrap-release-fixture@1.0.0"');
+    const { status: exit, stdout: output, stderr: errors } = child;
+    assert.equal(exit, 0, errors);
+    assert.ok((output)?.includes('"id": "noskrap-release-fixture@1.0.0"'));
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -46,12 +46,12 @@ for (const scenario of ["visible", "wrong-integrity", "staged"] as const) {
       const bytes = new TextEncoder().encode("verified test artifact");
       await writeFile(archive, bytes);
       const integrity = "sha512-" + createHash("sha512").update(bytes).digest("base64");
-      const workflow = await Bun.file(join(import.meta.dir, "../.github/workflows/publish.yml")).text();
+      const workflow = await readFile(".github/workflows/publish.yml", "utf8");
       const start = workflow.indexOf("node --input-type=module <<'JS'\n");
-      expect(start).toBeGreaterThan(-1);
+      assert.ok((start) > (-1));
       const body = workflow.slice(start).split("\n").slice(1);
       const end = body.findIndex(line => line.trim() === "JS");
-      expect(end).toBeGreaterThan(-1);
+      assert.ok((end) > (-1));
       const verification = body.slice(0, end).map(line => line.replace(/^          /, "")).join("\n");
       const script = join(directory, "verify.mjs");
       await writeFile(script, verification);
@@ -74,15 +74,13 @@ if (${JSON.stringify(scenario)} === "staged") {
   Date.now = () => ++reads <= 2 ? 0 : 120001;
 }
 `);
-      const process = Bun.spawn(["node", "--import", mock, script], {
-        env: { ...globalThis.process.env, NOSKRAP_RELEASE_ARCHIVE: archive }, stdout: "pipe", stderr: "pipe",
+      const child = spawnSync("node", ["--import", mock, script], {
+        env: { ...globalThis.process.env, NOSKRAP_RELEASE_ARCHIVE: archive }, encoding: "utf8",
       });
-      const [exit, output, errors] = await Promise.all([
-        process.exited, new Response(process.stdout).text(), new Response(process.stderr).text(),
-      ]);
-      expect(exit).toBe(scenario === "visible" ? 0 : 1);
-      if (scenario === "visible") expect(output).toContain("Verified public npm package noskrap@0.4.0");
-      else expect(errors).toContain(scenario === "staged" ? "Upload is not publicly available" : "Published artifact integrity mismatch");
+      const { status: exit, stdout: output, stderr: errors } = child;
+      assert.equal(exit, scenario === "visible" ? 0 : 1);
+      if (scenario === "visible") assert.ok((output)?.includes("Verified public npm package noskrap@0.4.0"));
+      else assert.ok((errors)?.includes(scenario === "staged" ? "Upload is not publicly available" : "Published artifact integrity mismatch"));
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
 }

@@ -16,9 +16,29 @@ Run the checks:
 NOSKRAP_TEST_REDIS_URL=redis://127.0.0.1:6379 bun run check
 ```
 
-That is the same gate CI runs: TypeScript build, Bun test suite, packed
+That is the same gate CI runs: TypeScript build, the same unit suite under
+Bun and Node.js 22.23.1, packed
 entrypoint checks under Node.js, then lint and static export of
 the docs site. `bun run check:web` runs only the docs site part.
+
+## Unit tests
+
+Run the shared unit suite under each runtime:
+
+```bash
+bun test src tests/publish.test.ts
+bun run test:node
+```
+
+The suite uses `node:test` and `node:assert/strict`, which both runtimes support.
+The Node command compiles the tests to the ignored `.test-dist/` directory.
+It clears that directory before each run to prevent stale tests. Use Node.js
+22.23.1, the version pinned in CI. No test dependency is added.
+
+Both runtimes use the same small `NextResponse` stub for proxy unit tests.
+The Node command loads it with a test-only module hook. The separate production
+integration tests use real Next.js 15 and 16. The full `check` command runs both
+unit suites in CI and before package publication.
 
 ## Test app
 

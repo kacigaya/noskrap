@@ -1,4 +1,5 @@
-import { afterEach, expect, test } from "bun:test";
+import assert from "node:assert/strict";
+import { afterEach, test } from "node:test";
 import { MemoryBotStorage, scoreRequest } from "./core.js";
 import { createNoSkrapChallengePassHandler, createTurnstileVerifier } from "./next.js";
 
@@ -17,17 +18,17 @@ test("Turnstile verifies the token with the fixed provider and expected context"
   let calls = 0;
   setFetch(async (input, init) => {
     calls++;
-    expect(input).toBe("https://challenges.cloudflare.com/turnstile/v0/siteverify");
-    expect(init?.method).toBe("POST");
-    expect(init?.signal).toBe(parentSignal);
-    expect(init?.redirect).toBe("error");
-    expect(String(init?.body)).toBe("secret=test-provider-secret&response=widget-token");
+    assert.equal(input, "https://challenges.cloudflare.com/turnstile/v0/siteverify");
+    assert.equal(init?.method, "POST");
+    assert.equal(init?.signal, parentSignal);
+    assert.equal(init?.redirect, "error");
+    assert.equal(String(init?.body), "secret=test-provider-secret&response=widget-token");
     return Response.json({ success: true, hostname: "example.test", action: "noskrap" });
   });
-  expect(await createTurnstileVerifier(options)(submission(undefined, {
+  assert.equal(await createTurnstileVerifier(options)(submission(undefined, {
     "x-forwarded-for": "attacker-controlled", host: "other.test",
-  }), parentSignal)).toBe(true);
-  expect(calls).toBe(1);
+  }), parentSignal), true);
+  assert.equal(calls, 1);
 });
 
 test("Turnstile rejects false, malformed, mismatched, expired, and replayed results", async () => {
@@ -39,11 +40,11 @@ test("Turnstile rejects false, malformed, mismatched, expired, and replayed resu
     { success: false, "error-codes": ["timeout-or-duplicate"] },
   ]) {
     setFetch(async () => Response.json(result));
-    expect(await createTurnstileVerifier(options)(submission(), signal())).toBe(false);
+    assert.equal(await createTurnstileVerifier(options)(submission(), signal()), false);
   }
   setFetch(async () => Response.json({ success: true, hostname: "example.test" }));
-  expect(await createTurnstileVerifier({ ...options, expectedAction: undefined })(submission(), signal())).toBe(true);
-  expect(await createTurnstileVerifier({ ...options, expectedHostname: "EXAMPLE.TEST", expectedAction: undefined })(submission(), signal())).toBe(true);
+  assert.equal(await createTurnstileVerifier({ ...options, expectedAction: undefined })(submission(), signal()), true);
+  assert.equal(await createTurnstileVerifier({ ...options, expectedHostname: "EXAMPLE.TEST", expectedAction: undefined })(submission(), signal()), true);
 });
 
 test("Turnstile rejects invalid and oversized submissions before contacting the provider", async () => {
@@ -51,11 +52,11 @@ test("Turnstile rejects invalid and oversized submissions before contacting the 
   setFetch(async () => { calls++; throw new Error("must not fetch"); });
   for (const body of ["bad JSON", "null", "[]", "{}", '{"token":false}',
     JSON.stringify({ token: " " }), JSON.stringify({ token: "x".repeat(2049) }), "x".repeat(4097)]) {
-    expect(await createTurnstileVerifier(options)(submission(body), signal())).toBe(false);
+    assert.equal(await createTurnstileVerifier(options)(submission(body), signal()), false);
   }
-  expect(await createTurnstileVerifier(options)(submission(undefined, { "content-length": "4097" }), signal())).toBe(false);
-  expect(await createTurnstileVerifier(options)(new Request("https://example.test/pass"), signal())).toBe(false);
-  expect(calls).toBe(0);
+  assert.equal(await createTurnstileVerifier(options)(submission(undefined, { "content-length": "4097" }), signal()), false);
+  assert.equal(await createTurnstileVerifier(options)(new Request("https://example.test/pass"), signal()), false);
+  assert.equal(calls, 0);
 });
 
 test("Turnstile cancels oversized streams", async () => {
@@ -66,8 +67,8 @@ test("Turnstile cancels oversized streams", async () => {
   });
   const init = { method: "POST", body, duplex: "half" };
   const request = new Request("https://example.test/pass", init);
-  expect(await createTurnstileVerifier(options)(request, signal())).toBe(false);
-  expect(cancelled).toBe(true);
+  assert.equal(await createTurnstileVerifier(options)(request, signal()), false);
+  assert.equal(cancelled, true);
 });
 
 test("Turnstile handler issues a visitor-bound pass only after provider success", async () => {
@@ -77,13 +78,13 @@ test("Turnstile handler issues a visitor-bound pass only after provider success"
   const handler = createNoSkrapChallengePassHandler({ ...config, verifyChallenge: createTurnstileVerifier(options) });
   setFetch(async () => Response.json({ success: true, hostname: "example.test", action: "noskrap" }));
   const passed = await handler(submission(undefined, { cookie }));
-  expect(passed.status).toBe(200);
-  expect(passed.headers.get("set-cookie")).toContain("noskrap_challenge=");
-  expect((await handler(submission())).status).toBe(401);
+  assert.equal(passed.status, 200);
+  assert.ok((passed.headers.get("set-cookie"))?.includes("noskrap_challenge="));
+  assert.equal((await handler(submission())).status, 401);
   setFetch(async () => Response.json({ success: false }));
   const rejected = await handler(submission(undefined, { cookie }));
-  expect(rejected.status).toBe(401);
-  expect(rejected.headers.get("set-cookie")).toBeNull();
+  assert.equal(rejected.status, 401);
+  assert.equal(rejected.headers.get("set-cookie"), null);
 });
 
 test("Turnstile provider failures and timeouts return 503 without a pass", async () => {
@@ -101,8 +102,8 @@ test("Turnstile provider failures and timeouts return 503 without a pass", async
   ]) {
     setFetch(provider);
     const response = await handler(submission());
-    expect(response.status).toBe(503);
-    expect(response.headers.get("set-cookie")).toBeNull();
+    assert.equal(response.status, 503);
+    assert.equal(response.headers.get("set-cookie"), null);
   }
 });
 
@@ -111,5 +112,5 @@ test("Turnstile validates configuration at setup", () => {
     { secretKey: "" }, { expectedHostname: "https://example.test" },
     { expectedHostname: "example.test:443" }, { expectedHostname: "" },
     { expectedAction: "bad action" }, { expectedAction: "x".repeat(33) },
-  ]) expect(() => createTurnstileVerifier({ ...options, ...invalid })).toThrow(TypeError);
+  ]) assert.throws(() => createTurnstileVerifier({ ...options, ...invalid }), TypeError);
 });
