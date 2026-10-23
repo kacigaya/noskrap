@@ -241,6 +241,18 @@ rules: [
 ]
 ```
 
+## Migration to 0.6.0
+
+- New rules can raise scores for clients without browser headers:
+  `headers.missingFetchMetadata`, `headers.missingClientHints`,
+  `headers.unbrandedChromium`, `rate.heavyBurst` and `behavior.cookieChurn`.
+  Run in observe mode first and tune them with `rules`.
+- `browser.automationUa` matches more HTTP libraries and headless tools.
+- Signed proxy contexts from 0.5.x are not accepted by 0.6.0 handlers. Deploy
+  the proxy and handlers together. Contexts expire after 30 seconds by default.
+- Replace telemetry verifiers that trust `sec-fetch-site` with
+  `verifyTelemetryToken`. See [Telemetry](/docs/user-guide/telemetry).
+
 ## Migration from 0.3.0
 
 - `recordTelemetry` returns `TelemetryResult`, not a scored `BotResult`.
