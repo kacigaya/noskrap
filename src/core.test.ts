@@ -215,6 +215,17 @@ describe("scoring", () => {
       "user-agent": "Mozilla/5.0 (Macintosh) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.3 Safari/605.1.15",
     })).toEqual([]);
     expect(await ids("http://example.test/", { "user-agent": chrome })).toEqual([]);
+    expect(await ids("http://127.example.test/", { "user-agent": chrome })).toEqual([]);
+    // Preflights and old Android WebViews cannot send Client Hints.
+    expect((await scoreRequest(new Request("https://example.test/", {
+      method: "OPTIONS",
+      headers: { "user-agent": chrome, "sec-fetch-mode": "cors", "access-control-request-method": "POST" },
+    }), config)).reasons).toEqual([]);
+    const webView = (version: number) =>
+      `Mozilla/5.0 (Linux; Android 13; Pixel 7; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/${version}.0.0.0 Mobile Safari/537.36`;
+    expect(await ids("https://example.test/", { "user-agent": webView(110), "sec-fetch-mode": "cors" })).toEqual([]);
+    expect(await ids("https://example.test/", { "user-agent": webView(120), "sec-fetch-mode": "cors" }))
+      .toEqual(["headers.missingClientHints"]);
     for (const origin of ["http://localhost:3000/", "http://app.localhost/", "http://127.0.0.2/"]) {
       expect(await ids(origin, { "user-agent": chrome }))
         .toEqual(["headers.missingFetchMetadata", "headers.missingClientHints"]);

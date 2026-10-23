@@ -210,7 +210,7 @@ Default bands are 0–29 allow, 30–59 observe, 60–84 challenge and 85–100 
 | `headers.missingBrowserHeaders` | 25 | HTML navigation without `user-agent`, `accept` or `accept-language`. |
 | `browser.automationUa` | 30 | User agent of a headless browser or HTTP library, such as `HeadlessChrome`, `curl`, `python-httpx`, `Go-http-client`, `node`, `axios` or `Scrapy`. |
 | `headers.missingFetchMetadata` | 25 | User agent claims Chromium 89+, Firefox 90+ or Safari 16.4+, but the request has no `sec-fetch-mode`. |
-| `headers.missingClientHints` | 15 | User agent claims Chromium 89+, but the request has no `sec-ch-ua`. |
+| `headers.missingClientHints` | 15 | User agent claims Chromium 89+, but the request has no `sec-ch-ua`. CORS preflights and Android WebView before 116 are exempt. |
 | `headers.unbrandedChromium` | 10 | User agent claims Chromium 89+, but `sec-ch-ua` names no vendor brand (only `Chromium` and a GREASE brand). Bare Chromium and Vivaldi users match too, so the score is low. |
 | `headers.uaClientHintsMismatch` | 15 | Mobile user agent and `sec-ch-ua-platform` disagree. |
 | `headers.badFetchMetadata` | 20 | Protected write without `sec-fetch-mode`, or with `sec-fetch-site: none`. |

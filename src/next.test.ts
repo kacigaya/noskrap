@@ -415,15 +415,21 @@ test("proxy decision is reused with one counter increment and a stable first coo
   expect(forwarded.headers.get("cookie")).toContain("session=keep");
 });
 
-test("context survives a different host for the same path and query", async () => {
+test("context binds the Host header, not the URL host", async () => {
   const config = { secret: SECRET, storage: new MemoryBotStorage() };
-  const request = new Request("http://localhost:3000/products?page=2", { headers: { "user-agent": "curl/8" } });
+  // Next.js can give the proxy `localhost` while the Host header is the real one.
+  const request = new Request("http://localhost:3000/products?page=2", {
+    headers: { host: "127.0.0.1:3000", "user-agent": "curl/8" },
+  });
   const forwarded = forwardedRequest(request, await createNoSkrapProxy(config)(request));
   const { readContext } = await import("./context");
   // A Server Component rebuilds the URL from the Host header.
-  const rebuilt = new Request("http://127.0.0.1:3000/products?page=2", { headers: forwarded.headers });
+  const rebuilt = new Request("https://127.0.0.1:3000/products?page=2", { headers: forwarded.headers });
   expect((await readContext(rebuilt, config))?.reasons.map(reason => reason.ruleId)).toEqual(["browser.automationUa"]);
-  expect(await readContext(new Request("http://127.0.0.1:3000/products?page=3", { headers: forwarded.headers }), config)).toBeNull();
+  expect(await readContext(new Request("https://127.0.0.1:3000/products?page=3", { headers: forwarded.headers }), config)).toBeNull();
+  const otherSite = new Headers(forwarded.headers);
+  otherSite.set("host", "tenant-b.example");
+  expect(await readContext(new Request("https://tenant-b.example/products?page=2", { headers: otherSite }), config)).toBeNull();
 });
 
 test("contexts reject tampering, changed URL/method/cookie, expiry and wrong secrets", async () => {

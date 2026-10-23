@@ -30,7 +30,7 @@ export async function signContext(
     id: visitorId,
     kind: "noskrap-request",
     method: request.method,
-    urlHash: await hashUrl(request.url),
+    urlHash: await hashUrl(request),
     ...(rewritten ? { rewritten: true as const } : {}),
     expiresAt: (config.now?.() ?? Date.now()) + (config.contextTtlMs ?? CONTEXT_TTL_MS),
     cookie: headers.get("set-cookie")!,
@@ -50,7 +50,7 @@ export async function readContext(
   const value: unknown = await verifyVisitorToken(token, config.secret);
   if (!isContext(value)) return null;
   const now = config.now?.() ?? Date.now();
-  const urlHash = await hashUrl(request.url);
+  const urlHash = await hashUrl(request);
   if (
     (requireRewriteDestination && !value.rewritten) ||
     value.method !== request.method ||
@@ -95,11 +95,14 @@ function isReason(value: unknown): boolean {
     Number.isFinite(reason.score) && reason.score >= 0;
 }
 
-// Bind to path and query only. Next.js can report a different host to the
-// proxy (for example `localhost`) than a handler rebuilds from the Host
-// header, and the proxy already overwrites this header on every request.
-async function hashUrl(url: string): Promise<string> {
-  const { pathname, search } = new URL(url);
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(pathname + search));
+// Bind to the Host header, path and query. Next.js can give the proxy a
+// different URL host (for example `localhost`) than the Host header that
+// handlers and Server Components rebuild the URL from. Both layers see the
+// same Host header, so contexts stay bound to one site.
+async function hashUrl(request: Request): Promise<string> {
+  const url = new URL(request.url);
+  const host = request.headers.get("host") ?? url.host;
+  const value = `${host.toLowerCase()}${url.pathname}${url.search}`;
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
 }

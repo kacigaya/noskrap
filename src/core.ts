@@ -156,7 +156,7 @@ export async function scoreRequest(
       addReason("headers.missingFetchMetadata", 25);
     }
     const brands = headers.get("sec-ch-ua");
-    if (browser === "chromium" && brands === null) {
+    if (browser === "chromium" && brands === null && sendsClientHints(request, userAgent)) {
       addReason("headers.missingClientHints", 15);
     } else if (browser === "chromium" && brands !== null && !hasVendorBrand(brands)) {
       addReason("headers.unbrandedChromium", 10);
@@ -586,7 +586,18 @@ function isHtmlNavigation(request: Request): boolean {
 function isTrustworthyOrigin(url: URL): boolean {
   const host = url.hostname;
   return url.protocol === "https:" || host === "localhost" ||
-    host.endsWith(".localhost") || host === "[::1]" || /^127\./.test(host);
+    host.endsWith(".localhost") || host === "[::1]" ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+}
+
+// CORS preflights never carry Client Hints, and Android WebView added them in
+// version 116. Both still send Sec-Fetch-*, so only this check is skipped.
+function sendsClientHints(request: Request, userAgent: string): boolean {
+  if (request.method === "OPTIONS" && request.headers.has("access-control-request-method")) {
+    return false;
+  }
+  const webView = /; wv\).*Chrome\/(\d+)/.exec(userAgent);
+  return !webView || Number(webView[1]) >= 116;
 }
 
 // Versions that send Sec-Fetch-* (Chromium 80, Firefox 90, Safari 16.4) and,
